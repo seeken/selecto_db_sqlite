@@ -118,9 +118,10 @@ defmodule Selecto.DB.SQLite do
     
     with {:ok, statement} <- Exqlite.Sqlite3.prepare(conn, sqlite_query),
          :ok <- bind_parameters(statement, params),
-         {:ok, rows} <- fetch_all(statement, timeout) do
+         {:ok, columns} <- Exqlite.Sqlite3.columns(conn, statement),
+         {:ok, rows} <- fetch_all(conn, statement, timeout) do
       
-      columns = Exqlite.Sqlite3.columns(statement)
+      columns = columns || []
       num_rows = length(rows)
       
       {:ok, %{
@@ -154,9 +155,10 @@ defmodule Selecto.DB.SQLite do
     
     with :ok <- Exqlite.Sqlite3.reset(statement),
          :ok <- bind_parameters(statement, params),
-         {:ok, rows} <- fetch_all(statement, timeout) do
+         {:ok, columns} <- Exqlite.Sqlite3.columns(conn, statement),
+         {:ok, rows} <- fetch_all(conn, statement, timeout) do
       
-      columns = Exqlite.Sqlite3.columns(statement)
+      columns = columns || []
       num_rows = length(rows)
       
       {:ok, %{
@@ -280,56 +282,73 @@ defmodule Selecto.DB.SQLite do
 
   @impl true
   def capabilities do
-    %{
-      # Basic features
-      select: true,
-      insert: true,
-      update: true,
-      delete: true,
-      joins: true,
-      subqueries: true,
-      group_by: true,
-      order_by: true,
+    # Start with all supported features = true
+    base_capabilities = supported_features()
+      |> Enum.map(&{&1, true})
+      |> Map.new()
+    
+    # Add explicitly unsupported features = false
+    unsupported_features = %{
+      right_join: false,
+      full_outer_join: false, 
+      lateral_join: false,
+      arrays: false,
+      uuid: false,
+      two_phase_commit: false,
+      stored_procedures: false,
+      explain_analyze: false
+    }
+    
+    # Add version-dependent features with detailed info
+    version_features = %{
+      window_functions: {:version, "3.25", version_compare(version(), "3.25") >= 0},
+      upsert: {:version, "3.24", version_compare(version(), "3.24") >= 0},
+      generated_columns: {:version, "3.31", version_compare(version(), "3.31") >= 0}
+    }
+    
+    # Add adapter metadata
+    metadata = %{
+      version: version(),
+      dialect: "sqlite",
+      max_identifier_length: 255,
+      max_query_length: 1_000_000
+    }
+    
+    base_capabilities
+    |> Map.merge(unsupported_features)
+    |> Map.merge(version_features)
+    |> Map.merge(metadata)
+  end
+
+  defp supported_features do
+    [
+      # Core SQL features (required)
+      :select, :insert, :update, :delete, :where, :joins, :subqueries, :group_by, :order_by,
       
-      # Join types
-      inner_join: true,
-      left_join: true,
-      right_join: false,  # Not supported, needs emulation
-      full_outer_join: false,  # Not supported, needs emulation
-      cross_join: true,
-      lateral_join: false,  # Not supported
+      # Join types (SQLite supported only)
+      :inner_join, :left_join, :cross_join,
       
       # Advanced SQL
-      cte: true,
-      recursive_cte: true,
-      window_functions: {:version, "3.25", true},
-      returning: true,  # RETURNING clause supported
+      :cte, :recursive_cte, :returning,
       
       # Data types
-      arrays: false,  # No native arrays, use JSON
-      json: true,  # JSON1 extension
-      uuid: false,  # Store as TEXT
+      :json, :regex,
       
       # Text search
-      fulltext_search: true,  # FTS5 extension
-      regex: true,
+      :fulltext_search,
       
       # Transactions
-      savepoints: true,
-      two_phase_commit: false,
+      :savepoints,
       
-      # SQLite specific
-      in_memory: true,
-      attach_database: true,
+      # Constraints & Indexes
+      :check_constraints, :partial_indexes, :expression_indexes,
       
-      # Other
-      explain: true,
-      explain_analyze: false,
-      triggers: true,
-      stored_procedures: false,  # Not supported
-      views: true,
-      indexes: true
-    }
+      # Performance
+      :explain,
+      
+      # SQLite specific features
+      :in_memory, :attach_database, :triggers, :views, :indexes
+    ]
   end
 
   @impl true
@@ -637,20 +656,17 @@ defmodule Selecto.DB.SQLite do
   end
 
   defp bind_parameters(statement, params) do
-    params
-    |> Enum.with_index(1)
-    |> Enum.reduce(:ok, fn
-      {param, index}, :ok ->
-        Exqlite.Sqlite3.bind(statement, index, param)
-      _, error ->
-        error
-    end)
+    # Bind all parameters at once using the correct API
+    case Exqlite.Sqlite3.bind(statement, params) do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
-  defp fetch_all(statement, timeout) do
+  defp fetch_all(db, statement, timeout) do
     # Fetch all rows with timeout
     task = Task.async(fn ->
-      fetch_rows(statement, [])
+      fetch_rows(db, statement, [])
     end)
     
     case Task.yield(task, timeout) || Task.shutdown(task) do
@@ -659,10 +675,10 @@ defmodule Selecto.DB.SQLite do
     end
   end
 
-  defp fetch_rows(statement, acc) do
-    case Exqlite.Sqlite3.step(statement) do
+  defp fetch_rows(db, statement, acc) do
+    case Exqlite.Sqlite3.step(db, statement) do
       {:row, row} ->
-        fetch_rows(statement, [row | acc])
+        fetch_rows(db, statement, [row | acc])
       :done ->
         {:ok, Enum.reverse(acc)}
       {:error, reason} ->
