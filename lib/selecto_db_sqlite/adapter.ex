@@ -6,13 +6,13 @@ defmodule SelectoDBSQLite.Adapter do
   @behaviour Selecto.DB.Adapter
 
   @missing_dependency {:adapter_dependency_missing, :exqlite}
+  @transaction_depth_key {__MODULE__, :transaction_depth}
 
   @impl true
   def name, do: :sqlite
 
   @impl true
   def connect(connection) when is_reference(connection), do: {:ok, connection}
-  def connect(connection) when is_pid(connection) or is_atom(connection), do: {:ok, connection}
   def connect(connection) when is_map(connection), do: connect(Map.to_list(connection))
 
   def connect(opts) when is_list(opts) do
@@ -77,7 +77,10 @@ defmodule SelectoDBSQLite.Adapter do
         {:error, @missing_dependency}
 
       is_reference(resolved_connection) ->
-        :ok
+        case execute(resolved_connection, "SELECT 1", [], []) do
+          {:ok, _} -> :ok
+          {:error, reason} -> {:error, {:connection_unhealthy, reason}}
+        end
 
       true ->
         {:error, {:invalid_connection, connection}}
@@ -90,7 +93,13 @@ defmodule SelectoDBSQLite.Adapter do
 
     cond do
       is_reference(resolved_connection) ->
-        %{type: :sqlite, connection: :exqlite, status: :connected}
+        case validate_connection(resolved_connection) do
+          :ok ->
+            %{type: :sqlite, connection: :exqlite, status: :connected}
+
+          {:error, reason} ->
+            %{type: :sqlite, connection: :exqlite, status: :disconnected, reason: reason}
+        end
 
       true ->
         %{type: :sqlite, status: :invalid, value: connection}
@@ -100,35 +109,82 @@ defmodule SelectoDBSQLite.Adapter do
   @impl true
   def transaction(connection, fun, _opts \\ []) when is_function(fun, 1) do
     resolved_connection = resolve_connection(connection)
+    depth = transaction_depth_for(resolved_connection)
+    begin_sql = if depth == 0, do: "BEGIN", else: "SAVEPOINT #{savepoint_name(depth + 1)}"
 
     with :ok <- validate_connection(resolved_connection),
-         {:ok, _} <- execute(resolved_connection, "BEGIN", [], []) do
-      execute_transaction_fun(resolved_connection, fun)
+         {:ok, _} <- execute(resolved_connection, begin_sql, [], []) do
+      put_transaction_depth(resolved_connection, depth + 1)
+      execute_transaction_fun(resolved_connection, fun, depth + 1)
     end
   end
 
-  defp execute_transaction_fun(connection, fun) do
+  defp execute_transaction_fun(connection, fun, depth) do
     case fun.(connection) do
       {:error, reason} ->
-        rollback(connection, reason)
+        rollback(connection, depth, reason)
 
       result ->
-        case execute(connection, "COMMIT", [], []) do
-          {:ok, _} -> {:ok, result}
-          {:error, reason} -> rollback(connection, reason)
+        case finalize_commit(connection, depth) do
+          :ok -> {:ok, result}
+          {:error, reason} -> rollback(connection, depth, reason)
         end
     end
   rescue
     error ->
-      rollback(connection, error)
+      rollback(connection, depth, error)
   catch
     kind, reason ->
-      rollback(connection, {kind, reason})
+      rollback(connection, depth, {kind, reason})
+  after
+    put_transaction_depth(connection, max(depth - 1, 0))
   end
 
-  defp rollback(connection, reason) do
+  defp finalize_commit(connection, 1) do
+    case execute(connection, "COMMIT", [], []) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp finalize_commit(connection, depth) when depth > 1 do
+    case execute(connection, "RELEASE SAVEPOINT #{savepoint_name(depth)}", [], []) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp rollback(connection, 1, reason) do
     _ = execute(connection, "ROLLBACK", [], [])
     {:error, reason}
+  end
+
+  defp rollback(connection, depth, reason) when depth > 1 do
+    savepoint = savepoint_name(depth)
+    _ = execute(connection, "ROLLBACK TO SAVEPOINT #{savepoint}", [], [])
+    _ = execute(connection, "RELEASE SAVEPOINT #{savepoint}", [], [])
+    {:error, reason}
+  end
+
+  defp savepoint_name(depth), do: "selecto_sp_#{depth}"
+
+  defp transaction_depth_for(connection) do
+    transaction_depths = Process.get(@transaction_depth_key, %{})
+    Map.get(transaction_depths, connection, 0)
+  end
+
+  defp put_transaction_depth(connection, depth) do
+    transaction_depths = Process.get(@transaction_depth_key, %{})
+
+    updated_depths =
+      if depth <= 0 do
+        Map.delete(transaction_depths, connection)
+      else
+        Map.put(transaction_depths, connection, depth)
+      end
+
+    Process.put(@transaction_depth_key, updated_depths)
+    :ok
   end
 
   defp execute_statement(connection, query, params) do

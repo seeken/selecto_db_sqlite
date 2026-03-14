@@ -10,12 +10,14 @@ using Selecto against SQLite via `exqlite`.
 ```elixir
 def deps do
   [
-    {:selecto, "~> 0.3.16"},
+    {:selecto, "~> 0.4.0"},
     {:selecto_db_adapter, "~> 0.1"},
-    {:selecto_db_sqlite, "~> 0.1"}
+    {:selecto_db_sqlite, "~> 0.1.0"}
   ]
 end
 ```
+
+Current package version: `0.1.0`.
 
 ## Usage
 
@@ -44,6 +46,8 @@ selecto =
 - Placeholder style is `?`.
 - Identifier quoting uses double quotes.
 - Streaming is not currently supported.
+- Includes adapter callbacks for `execute_raw/3`, `validate_connection/1`,
+  `connection_info/1`, and `transaction/3`.
 
 ## Local Workspace Development
 

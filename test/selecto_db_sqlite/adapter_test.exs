@@ -84,6 +84,98 @@ defmodule SelectoDBSQLite.AdapterTest do
     assert :ok = Exqlite.Sqlite3.close(conn)
   end
 
+  test "sqlite adapter supports nested transactions with savepoints" do
+    assert {:ok, conn} = SelectoDBSQLite.Adapter.connect(database: ":memory:")
+
+    assert {:ok, _} =
+             SelectoDBSQLite.Adapter.execute(
+               conn,
+               "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+               [],
+               []
+             )
+
+    assert {:ok, :outer_ok} =
+             SelectoDBSQLite.Adapter.transaction(conn, fn tx_conn ->
+               assert {:ok, _} =
+                        SelectoDBSQLite.Adapter.execute(
+                          tx_conn,
+                          "INSERT INTO users (id, name) VALUES (?, ?)",
+                          [1, "Outer"],
+                          []
+                        )
+
+               assert {:error, :inner_rollback} =
+                        SelectoDBSQLite.Adapter.transaction(tx_conn, fn inner_conn ->
+                          SelectoDBSQLite.Adapter.execute(
+                            inner_conn,
+                            "INSERT INTO users (id, name) VALUES (?, ?)",
+                            [2, "Inner"],
+                            []
+                          )
+
+                          {:error, :inner_rollback}
+                        end)
+
+               :outer_ok
+             end)
+
+    assert {:ok, %{rows: [[1]], columns: ["total"]}} =
+             SelectoDBSQLite.Adapter.execute(conn, "SELECT COUNT(*) AS total FROM users", [], [])
+
+    assert :ok = Exqlite.Sqlite3.close(conn)
+  end
+
+  test "sqlite adapter transaction rolls back on raised exception" do
+    assert {:ok, conn} = SelectoDBSQLite.Adapter.connect(database: ":memory:")
+
+    assert {:ok, _} =
+             SelectoDBSQLite.Adapter.execute(
+               conn,
+               "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+               [],
+               []
+             )
+
+    assert {:error, %RuntimeError{message: "boom"}} =
+             SelectoDBSQLite.Adapter.transaction(conn, fn tx_conn ->
+               SelectoDBSQLite.Adapter.execute(
+                 tx_conn,
+                 "INSERT INTO users (id, name) VALUES (?, ?)",
+                 [1, "Crash"],
+                 []
+               )
+
+               raise "boom"
+             end)
+
+    assert {:ok, %{rows: [[0]], columns: ["total"]}} =
+             SelectoDBSQLite.Adapter.execute(conn, "SELECT COUNT(*) AS total FROM users", [], [])
+
+    assert :ok = Exqlite.Sqlite3.close(conn)
+  end
+
+  test "sqlite adapter rejects pid and atom connection options" do
+    pid = self()
+
+    assert {:error, {:invalid_connection_options, :named_conn}} =
+             SelectoDBSQLite.Adapter.connect(:named_conn)
+
+    assert {:error, {:invalid_connection_options, ^pid}} =
+             SelectoDBSQLite.Adapter.connect(pid)
+  end
+
+  test "sqlite adapter reports disconnected info for closed connection" do
+    assert {:ok, conn} = SelectoDBSQLite.Adapter.connect(database: ":memory:")
+    assert :ok = Exqlite.Sqlite3.close(conn)
+
+    assert {:error, {:connection_unhealthy, _reason}} =
+             SelectoDBSQLite.Adapter.validate_connection(conn)
+
+    assert %{type: :sqlite, connection: :exqlite, status: :disconnected, reason: _reason} =
+             SelectoDBSQLite.Adapter.connection_info(conn)
+  end
+
   test "sqlite adapter rejects invalid connection values" do
     assert SelectoDBSQLite.Adapter.execute(:invalid, "SELECT 1", [], []) ==
              {:error, {:invalid_connection, :invalid}}
