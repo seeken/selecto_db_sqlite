@@ -48,6 +48,11 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   @impl true
+  def execute_raw(connection, query, params) do
+    execute(connection, query, params, [])
+  end
+
+  @impl true
   def placeholder(_index), do: "?"
 
   @impl true
@@ -61,6 +66,69 @@ defmodule SelectoDBSQLite.Adapter do
   @impl true
   def supports?(feature) do
     feature in [:cte, :window_functions, :transactions]
+  end
+
+  @impl true
+  def validate_connection(connection) do
+    resolved_connection = resolve_connection(connection)
+
+    cond do
+      not dependency_available?() ->
+        {:error, @missing_dependency}
+
+      is_reference(resolved_connection) ->
+        :ok
+
+      true ->
+        {:error, {:invalid_connection, connection}}
+    end
+  end
+
+  @impl true
+  def connection_info(connection) do
+    resolved_connection = resolve_connection(connection)
+
+    cond do
+      is_reference(resolved_connection) ->
+        %{type: :sqlite, connection: :exqlite, status: :connected}
+
+      true ->
+        %{type: :sqlite, status: :invalid, value: connection}
+    end
+  end
+
+  @impl true
+  def transaction(connection, fun, _opts \\ []) when is_function(fun, 1) do
+    resolved_connection = resolve_connection(connection)
+
+    with :ok <- validate_connection(resolved_connection),
+         {:ok, _} <- execute(resolved_connection, "BEGIN", [], []) do
+      execute_transaction_fun(resolved_connection, fun)
+    end
+  end
+
+  defp execute_transaction_fun(connection, fun) do
+    case fun.(connection) do
+      {:error, reason} ->
+        rollback(connection, reason)
+
+      result ->
+        case execute(connection, "COMMIT", [], []) do
+          {:ok, _} -> {:ok, result}
+          {:error, reason} -> rollback(connection, reason)
+        end
+    end
+  rescue
+    error ->
+      rollback(connection, error)
+  catch
+    kind, reason ->
+      rollback(connection, {kind, reason})
+  end
+
+  defp rollback(connection, reason) do
+    _ = execute(connection, "ROLLBACK", [], [])
+    {:error, reason}
   end
 
   defp execute_statement(connection, query, params) do
