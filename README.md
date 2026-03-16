@@ -11,7 +11,6 @@ using Selecto against SQLite via `exqlite`.
 def deps do
   [
     {:selecto, "~> 0.4.0"},
-    {:selecto_db_adapter, "~> 0.1"},
     {:selecto_db_sqlite, "~> 0.1.0"}
   ]
 end
@@ -58,6 +57,3 @@ SELECTO_ECOSYSTEM_USE_LOCAL=true
 ```
 
 When enabled, this package resolves `{:selecto, path: "../selecto"}`.
-
-For adapter package development, it also resolves
-`{:selecto_db_adapter, path: "../selecto_db_adapter"}`.
