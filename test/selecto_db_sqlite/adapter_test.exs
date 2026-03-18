@@ -184,4 +184,82 @@ defmodule SelectoDBSQLite.AdapterTest do
   test "sqlite adapter does not claim stream support" do
     refute SelectoDBSQLite.Adapter.supports?(:stream)
   end
+
+  test "sqlite adapter reports schema introspection support" do
+    assert SelectoDBSQLite.Adapter.supports?(:schema_introspection)
+  end
+
+  test "sqlite adapter lists tables for selecto_mix generators" do
+    assert {:ok, conn} = SelectoDBSQLite.Adapter.connect(database: ":memory:")
+
+    assert {:ok, _} =
+             SelectoDBSQLite.Adapter.execute(
+               conn,
+               "CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+               [],
+               []
+             )
+
+    assert {:ok, _} =
+             SelectoDBSQLite.Adapter.execute(
+               conn,
+               "CREATE TABLE orders (id INTEGER PRIMARY KEY, account_id INTEGER REFERENCES accounts(id))",
+               [],
+               []
+             )
+
+    assert {:ok, ["accounts", "orders"]} = SelectoDBSQLite.Adapter.list_tables(conn)
+    assert :ok = Exqlite.Sqlite3.close(conn)
+  end
+
+  test "sqlite adapter introspects tables for selecto_mix generators" do
+    assert {:ok, conn} = SelectoDBSQLite.Adapter.connect(database: ":memory:")
+    assert {:ok, _} = SelectoDBSQLite.Adapter.execute(conn, "PRAGMA foreign_keys = ON", [], [])
+
+    assert {:ok, _} =
+             SelectoDBSQLite.Adapter.execute(
+               conn,
+               "CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+               [],
+               []
+             )
+
+    assert {:ok, _} =
+             SelectoDBSQLite.Adapter.execute(
+               conn,
+               "CREATE TABLE orders (id INTEGER PRIMARY KEY, account_id INTEGER NOT NULL REFERENCES accounts(id), inserted_at TEXT)",
+               [],
+               []
+             )
+
+    assert {:ok, metadata} =
+             SelectoDBSQLite.Adapter.introspect_table(conn, "orders", expand: false)
+
+    assert metadata.table_name == "orders"
+    assert metadata.schema == "main"
+    assert metadata.fields == [:id, :account_id, :inserted_at]
+    assert metadata.field_types.id == :integer
+    assert metadata.field_types.inserted_at == :string
+    assert metadata.primary_key == :id
+    assert metadata.source == :sqlite
+
+    assert metadata.associations == %{
+             account: %{
+               association_type: :belongs_to,
+               constraint_name: "fk_orders_0",
+               field: :account,
+               is_through: false,
+               join_type: :inner,
+               owner_key: :account_id,
+               queryable: :accounts,
+               related_key: :id,
+               related_module_name: "Account",
+               related_schema: "Account",
+               related_table: "accounts",
+               type: :belongs_to
+             }
+           }
+
+    assert :ok = Exqlite.Sqlite3.close(conn)
+  end
 end
