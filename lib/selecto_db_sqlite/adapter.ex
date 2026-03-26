@@ -7,6 +7,14 @@ defmodule SelectoDBSQLite.Adapter do
 
   @missing_dependency {:adapter_dependency_missing, :exqlite}
   @transaction_depth_key {__MODULE__, :transaction_depth}
+  @supported_features [
+    :cte,
+    :json_rowset,
+    :sqlite_upsert,
+    :window_functions,
+    :transactions,
+    :schema_introspection
+  ]
 
   @impl true
   def name, do: :sqlite
@@ -65,7 +73,7 @@ defmodule SelectoDBSQLite.Adapter do
 
   @impl true
   def supports?(feature) do
-    feature in [:cte, :window_functions, :transactions, :schema_introspection]
+    feature in @supported_features
   end
 
   @impl true

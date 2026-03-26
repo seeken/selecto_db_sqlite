@@ -189,6 +189,12 @@ defmodule SelectoDBSQLite.AdapterTest do
     assert SelectoDBSQLite.Adapter.supports?(:schema_introspection)
   end
 
+  test "sqlite adapter reports baseline sqlite parity capabilities" do
+    assert SelectoDBSQLite.Adapter.supports?(:json_rowset)
+    assert SelectoDBSQLite.Adapter.supports?(:sqlite_upsert)
+    refute SelectoDBSQLite.Adapter.supports?(:fts5)
+  end
+
   test "sqlite adapter lists tables for selecto_mix generators" do
     assert {:ok, conn} = SelectoDBSQLite.Adapter.connect(database: ":memory:")
 
