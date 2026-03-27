@@ -76,6 +76,32 @@ defmodule SelectoDBSQLite.Adapter do
     feature in @supported_features
   end
 
+  def fts5_available?(connection) do
+    with {:ok, resolved_connection} <- require_reference_connection(connection),
+         {:ok, _} <-
+           execute(
+             resolved_connection,
+             "CREATE VIRTUAL TABLE temp.selecto_fts5_probe USING fts5(content)",
+             [],
+             []
+           ) do
+      _ = execute(resolved_connection, "DROP TABLE IF EXISTS temp.selecto_fts5_probe", [], [])
+      true
+    else
+      _ -> false
+    end
+  end
+
+  def json1_available?(connection) do
+    with {:ok, resolved_connection} <- require_reference_connection(connection),
+         {:ok, %{rows: [[1]]}} <-
+           execute(resolved_connection, "SELECT json_valid('{\"ok\":1}')", [], []) do
+      true
+    else
+      _ -> false
+    end
+  end
+
   @impl true
   def list_tables(connection, _opts \\ []) do
     query = """
@@ -631,6 +657,16 @@ defmodule SelectoDBSQLite.Adapter do
 
   defp resolve_connection(%{db: db}) when is_reference(db), do: db
   defp resolve_connection(connection), do: connection
+
+  defp require_reference_connection(connection) do
+    resolved_connection = resolve_connection(connection)
+
+    if is_reference(resolved_connection) do
+      {:ok, resolved_connection}
+    else
+      {:error, {:invalid_connection, connection}}
+    end
+  end
 
   defp normalize_query(query) when is_binary(query), do: query
   defp normalize_query(query), do: IO.iodata_to_binary(query)

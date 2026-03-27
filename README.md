@@ -51,6 +51,9 @@ selecto =
   explicit availability/configuration path.
 - Includes adapter callbacks for `execute_raw/3`, `validate_connection/1`,
   `connection_info/1`, and `transaction/3`.
+- The adapter now exposes `json1_available?/1` and `fts5_available?/1` probes so
+  applications can verify optional SQLite JSON and full-text support at runtime
+  before enabling related features.
 
 ## FTS5 Field Configuration
 
@@ -73,6 +76,13 @@ Selecto.filter(selecto, {"name", {:text_search, "wireless charger"}})
 The builder currently accepts `type: :fts5`, `sqlite_fts5: true`, or
 `text_search_backend: :fts5` as the field-level opt-in markers.
 
+If you need a runtime guard before exposing FTS-backed features, probe the live
+connection first:
+
+```elixir
+SelectoDBSQLite.Adapter.fts5_available?(conn)
+```
+
 ## SQLite JSON Rowsets
 
 Selecto now includes a SQLite-oriented helper for JSON row expansion through
@@ -86,6 +96,10 @@ query =
 ```
 
 Set `function: :json_tree` to switch from `json_each` to `json_tree`.
+
+Scalar JSON helpers now also map cleanly to SQLite functions for supported
+operations like `json_typeof` and `json_array_length`, and object-style
+`json_contains` filters can compile into `json_extract(...) = ...` predicates.
 
 Named query members can expose the same rowsets through `query_members.laterals`:
 

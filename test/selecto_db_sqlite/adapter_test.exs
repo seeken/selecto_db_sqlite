@@ -195,6 +195,15 @@ defmodule SelectoDBSQLite.AdapterTest do
     refute SelectoDBSQLite.Adapter.supports?(:fts5)
   end
 
+  test "sqlite adapter can probe optional json1 and fts5 support" do
+    assert {:ok, conn} = SelectoDBSQLite.Adapter.connect(database: ":memory:")
+
+    assert SelectoDBSQLite.Adapter.json1_available?(conn)
+    assert SelectoDBSQLite.Adapter.fts5_available?(conn)
+
+    assert :ok = Exqlite.Sqlite3.close(conn)
+  end
+
   test "sqlite adapter lists tables for selecto_mix generators" do
     assert {:ok, conn} = SelectoDBSQLite.Adapter.connect(database: ":memory:")
 
