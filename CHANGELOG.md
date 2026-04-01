@@ -10,6 +10,8 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - Dropped the standalone `selecto_db_adapter` dependency and now depend on
   `selecto` directly for the adapter behaviour contract.
 - Updated installation guidance for the direct `selecto` dependency path.
+- Added `list_relations/2` support so SQLite adapter introspection can return
+  both tables and views for DB-backed generator flows.
 
 ### Added
 - Initial external SQLite adapter package for Selecto.

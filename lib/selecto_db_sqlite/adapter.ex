@@ -119,6 +119,41 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   @impl true
+  def list_relations(connection, opts \\ []) do
+    include_views = Keyword.get(opts, :include_views, false)
+
+    query =
+      if include_views do
+        """
+        SELECT name, type
+        FROM sqlite_master
+        WHERE type IN ('table', 'view')
+          AND name NOT LIKE 'sqlite_%'
+        ORDER BY name
+        """
+      else
+        """
+        SELECT name, 'table' AS type
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name NOT LIKE 'sqlite_%'
+        ORDER BY name
+        """
+      end
+
+    case introspection_query(connection, query, []) do
+      {:ok, %{rows: rows}} ->
+        {:ok,
+         Enum.map(rows, fn [name, type] ->
+           %{name: name, source_kind: normalize_relation_source_kind(type)}
+         end)}
+
+      {:error, reason} ->
+        {:error, {:query_failed, reason}}
+    end
+  end
+
+  @impl true
   def introspect_table(connection, table_name, opts \\ []) do
     include_associations = Keyword.get(opts, :include_associations, true)
     expand = Keyword.get(opts, :expand, false)
@@ -212,6 +247,10 @@ defmodule SelectoDBSQLite.Adapter do
         %{type: :sqlite, status: :invalid, value: connection}
     end
   end
+
+  defp normalize_relation_source_kind("table"), do: :table
+  defp normalize_relation_source_kind("view"), do: :view
+  defp normalize_relation_source_kind(other), do: other
 
   @impl true
   def transaction(connection, fun, _opts \\ []) when is_function(fun, 1) do

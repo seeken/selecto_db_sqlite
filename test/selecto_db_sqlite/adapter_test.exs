@@ -277,4 +277,30 @@ defmodule SelectoDBSQLite.AdapterTest do
 
     assert :ok = Exqlite.Sqlite3.close(conn)
   end
+
+  test "sqlite adapter lists relations including views when requested" do
+    assert {:ok, conn} = SelectoDBSQLite.Adapter.connect(database: ":memory:")
+
+    assert {:ok, _} =
+             SelectoDBSQLite.Adapter.execute(
+               conn,
+               "CREATE TABLE orders (id INTEGER PRIMARY KEY)",
+               [],
+               []
+             )
+
+    assert {:ok, _} =
+             SelectoDBSQLite.Adapter.execute(
+               conn,
+               "CREATE VIEW active_orders AS SELECT id FROM orders",
+               [],
+               []
+             )
+
+    assert {:ok,
+            [%{name: "active_orders", source_kind: :view}, %{name: "orders", source_kind: :table}]} =
+             SelectoDBSQLite.Adapter.list_relations(conn, include_views: true)
+
+    assert :ok = Exqlite.Sqlite3.close(conn)
+  end
 end
