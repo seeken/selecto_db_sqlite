@@ -27,6 +27,7 @@ defmodule SelectoDBSQLite.MixProject do
   defp deps do
     [
       selecto_dep(),
+      selecto_updato_dep(),
       {:exqlite, "~> 0.33"},
       {:ex_doc, "~> 0.29", only: :dev, runtime: false}
     ]
@@ -37,6 +38,14 @@ defmodule SelectoDBSQLite.MixProject do
       {:selecto, path: "../selecto"}
     else
       {:selecto, ">= 0.4.0 and < 0.6.0"}
+    end
+  end
+
+  defp selecto_updato_dep do
+    if use_local_ecosystem?() do
+      {:selecto_updato, path: "../selecto_updato"}
+    else
+      {:selecto_updato, ">= 0.1.0 and < 0.3.0"}
     end
   end
 
