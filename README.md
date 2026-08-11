@@ -38,19 +38,20 @@ selecto = Selecto.configure(domain, config, adapter: Selecto.DB.SQLite)
 ## Feature Support
 
 ### Supported Features
-- ✅ Basic CRUD operations
+- ✅ Query execution
 - ✅ Joins (INNER, LEFT, CROSS)
 - ✅ CTEs and recursive CTEs
 - ✅ Window functions (SQLite 3.25+)
 - ✅ JSON operations (JSON1 extension)
 - ✅ Full-text search (FTS5 extension)
-- ✅ RETURNING clause
 - ✅ Savepoints
 - ✅ In-memory databases
 - ✅ Attached databases
 - ✅ EXPLAIN QUERY PLAN
 
 ### Limitations
+- ❌ Portable writes through `Selecto.DB.WriteAdapter`
+- ❌ RETURNING through the Selecto adapter
 - ❌ RIGHT JOIN (emulate with LEFT JOIN)
 - ❌ FULL OUTER JOIN (emulate with UNION)
 - ❌ Stored procedures

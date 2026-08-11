@@ -1,6 +1,9 @@
 defmodule SelectoDBSQLite.Adapter do
   @moduledoc """
-  SQLite adapter for Selecto.
+  Read/query SQLite adapter for Selecto.
+
+  This module does not implement `Selecto.DB.WriteAdapter`; portable writes
+  remain unavailable until a dedicated write implementation is added.
   """
 
   @behaviour Selecto.DB.Adapter
@@ -86,7 +89,7 @@ defmodule SelectoDBSQLite.Adapter do
   def supports?(:window_functions), do: true
   def supports?(:cte), do: true
   def supports?(:recursive_cte), do: true
-  def supports?(:returning), do: true
+  def supports?(:returning), do: false
   def supports?(:rollup), do: false
   def supports?(:stream), do: false
   def supports?(_feature), do: false
