@@ -9,8 +9,8 @@ Add `selecto_db_sqlite` to your list of dependencies:
 ```elixir
 def deps do
   [
-    {:selecto, "~> 1.0"},
-    {:selecto_db_sqlite, "~> 0.1"},
+    {:selecto, ">= 0.4.13 and < 0.6.0"},
+    {:selecto_db_sqlite, "~> 0.2"},
     {:exqlite, "~> 0.13"}
   ]
 end
@@ -32,7 +32,7 @@ config = [
   foreign_keys: :on
 ]
 
-selecto = Selecto.configure(domain, config, adapter: Selecto.DB.SQLite)
+selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
 ```
 
 ## Feature Support
@@ -48,10 +48,11 @@ selecto = Selecto.configure(domain, config, adapter: Selecto.DB.SQLite)
 - ✅ In-memory databases
 - ✅ Attached databases
 - ✅ EXPLAIN QUERY PLAN
+- ✅ Portable insert, update, upsert, and delete
+- ✅ Atomic write batches
+- ✅ `RETURNING` and generated-key graphs on SQLite 3.35+
 
 ### Limitations
-- ❌ Portable writes through `Selecto.DB.WriteAdapter`
-- ❌ RETURNING through the Selecto adapter
 - ❌ RIGHT JOIN (emulate with LEFT JOIN)
 - ❌ FULL OUTER JOIN (emulate with UNION)
 - ❌ Stored procedures
@@ -59,6 +60,8 @@ selecto = Selecto.configure(domain, config, adapter: Selecto.DB.SQLite)
 - ❌ Native array types (use JSON)
 - ❌ Limited ALTER TABLE
 - ⚠️ Single writer at a time
+- ⚠️ Write capabilities are probed from the connected SQLite runtime and fail
+  closed when `RETURNING` is unavailable
 
 ## Type Mappings
 

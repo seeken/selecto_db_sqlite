@@ -1,7 +1,7 @@
 defmodule Selecto.DB.SQLite.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/selecto/selecto_db_sqlite"
 
   def project do
@@ -26,11 +26,33 @@ defmodule Selecto.DB.SQLite.MixProject do
 
   defp deps do
     [
-      {:selecto, path: "../selecto"},
+      selecto_dep(),
       {:exqlite, "~> 0.13"},
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.27", only: :dev, runtime: false}
     ]
+  end
+
+  defp selecto_dep do
+    if use_local_ecosystem?() do
+      {:selecto, path: local_selecto_path()}
+    else
+      {:selecto, ">= 0.4.13 and < 0.6.0"}
+    end
+  end
+
+  defp local_selecto_path do
+    "SELECTO_ECOSYSTEM_SELECTO_PATH"
+    |> System.get_env("../selecto")
+    |> Path.expand(__DIR__)
+  end
+
+  defp use_local_ecosystem? do
+    case System.get_env("SELECTO_ECOSYSTEM_USE_LOCAL") do
+      value when value in ["1", "true", "TRUE", "yes", "YES", "on", "ON"] -> true
+      value when value in ["0", "false", "FALSE", "no", "NO", "off", "OFF"] -> false
+      _ -> File.dir?(Path.expand("../selecto", __DIR__))
+    end
   end
 
   defp description do
