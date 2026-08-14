@@ -1,7 +1,7 @@
 defmodule Selecto.DB.SQLite.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.5.0"
   @source_url "https://github.com/selecto/selecto_db_sqlite"
 
   def project do
@@ -37,7 +37,7 @@ defmodule Selecto.DB.SQLite.MixProject do
     if use_local_ecosystem?() do
       {:selecto, path: local_selecto_path()}
     else
-      {:selecto, ">= 0.4.13 and < 0.6.0"}
+      {:selecto, ">= 0.5.0 and < 0.6.0"}
     end
   end
 

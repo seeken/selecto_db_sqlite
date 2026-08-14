@@ -17,6 +17,56 @@ defmodule SelectoDBSQLite.Adapter do
   def name, do: :sqlite
 
   @impl true
+  def dialect, do: SelectoDBSQLite.Dialect
+
+  @impl true
+  def capability(:text_search) do
+    %{
+      feature: :text_search,
+      supported?: true,
+      modes: [:websearch, :boolean, :phrase],
+      default_mode: :websearch,
+      document_type: :text_search_document,
+      help: "SQLite FTS5 search with web-style, boolean, and phrase query modes."
+    }
+  end
+
+  def capability(feature), do: %{feature: feature, supported?: supports?(feature)}
+
+  @impl true
+  def normalize_type(type) when is_binary(type) do
+    case type |> String.trim() |> String.downcase() do
+      value when value in ["integer", "int"] -> :integer
+      value when value in ["real", "double", "float"] -> :float
+      value when value in ["numeric", "decimal"] -> :decimal
+      value when value in ["text", "varchar", "char", "clob"] -> :string
+      "blob" -> :binary
+      "boolean" -> :boolean
+      "date" -> :date
+      value when value in ["datetime", "timestamp"] -> :naive_datetime
+      "json" -> :map
+      _unknown -> type
+    end
+  end
+
+  def normalize_type(:fts5), do: :text_search_document
+  def normalize_type(type), do: Selecto.TypeSystem.normalize_type(type)
+
+  @impl true
+  def type_family(type), do: type |> normalize_type() |> Selecto.TypeFamily.of()
+
+  @impl true
+  def normalize_execution_result(%{rows: rows, columns: columns} = result) do
+    {:ok, %{result | rows: rows || [], columns: Enum.map(columns || [], &to_string/1)}}
+  end
+
+  def normalize_execution_result(result), do: {:error, {:invalid_adapter_result, result}}
+
+  @impl true
+  def normalize_error(%Selecto.Error{} = error), do: error
+  def normalize_error(reason), do: Selecto.Error.from_reason(reason)
+
+  @impl true
   def connect(connection) when is_reference(connection), do: {:ok, connection}
   def connect(opts) when is_map(opts), do: connect(Map.to_list(opts))
 
@@ -32,6 +82,13 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   def connect(other), do: {:error, {:invalid_connection_options, other}}
+
+  @impl true
+  def disconnect(connection) when is_reference(connection) do
+    Exqlite.Sqlite3.close(connection)
+  end
+
+  def disconnect(_connection), do: :ok
 
   @impl true
   def execute(connection, query, params, opts) do
@@ -88,6 +145,7 @@ defmodule SelectoDBSQLite.Adapter do
   def supports?(:cte), do: true
   def supports?(:recursive_cte), do: true
   def supports?(:returning), do: true
+  def supports?(:text_search), do: true
   def supports?(:rollup), do: false
   def supports?(:stream), do: false
   def supports?(_feature), do: false

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 - 2026-08-14
+
+- Raised the Selecto baseline to `0.5.0` and implemented the explicit runtime,
+  normalized result/error/type, and SQLite-owned dialect-fragment ports.
+- Unsupported PostgreSQL-shaped features now fail with structured capability
+  evidence instead of inheriting core fallback SQL.
+- SQLite now owns portable datetime-format and case-insensitive comparison
+  rendering and explicitly rejects unsupported timezone/epoch conversion.
+
 ## 0.2.0 - 2026-08-12
 
 - Added runtime-gated portable insert, update, upsert, delete, arbitrary
