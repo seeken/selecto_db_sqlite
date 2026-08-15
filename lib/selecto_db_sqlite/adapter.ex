@@ -95,9 +95,10 @@ defmodule SelectoDBSQLite.Adapter do
     with :ok <- ensure_exqlite() do
       connection = unwrap_connection(connection)
       timeout = Keyword.get(opts, :timeout, 5_000)
-      sqlite_query = query |> normalize_query() |> convert_parameters(params || [])
+      params = normalize_params(params || [])
+      sqlite_query = query |> normalize_query() |> convert_parameters(params)
 
-      execute_prepared(connection, sqlite_query, params || [], timeout)
+      execute_prepared(connection, sqlite_query, params, timeout)
     end
   end
 
@@ -555,6 +556,14 @@ defmodule SelectoDBSQLite.Adapter do
 
   defp normalize_query(query) when is_binary(query), do: query
   defp normalize_query(query), do: IO.iodata_to_binary(query)
+
+  defp normalize_params(params) when is_list(params), do: Enum.map(params, &normalize_param/1)
+  defp normalize_params(params), do: params
+
+  defp normalize_param(%Decimal{} = value), do: Decimal.to_string(value, :normal)
+  defp normalize_param(true), do: 1
+  defp normalize_param(false), do: 0
+  defp normalize_param(value), do: value
 
   defp fetch_all(db, statement, timeout) do
     task = Task.async(fn -> fetch_rows(db, statement, []) end)
