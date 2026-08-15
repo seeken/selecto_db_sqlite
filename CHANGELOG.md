@@ -2,6 +2,8 @@
 
 ## 0.5.0 - 2026-08-14
 
+- Removed renderer aliases for the retired `json_extract_path` and
+  `json_extract_path_text` core operations.
 - Raised the Selecto baseline to `0.5.0` and implemented the explicit runtime,
   normalized result/error/type, and SQLite-owned dialect-fragment ports.
 - Unsupported PostgreSQL-shaped features now fail with structured capability
