@@ -128,9 +128,12 @@ selecto
   |> Selecto.select(["id", "user_id", "total"])
   |> Selecto.filter({"created_at", ">", "2024-01-01"})
 end)
-|> Selecto.from_cte("recent_orders")
+|> Selecto.select(["id"])
 |> Selecto.execute()
 ```
+
+The configured domain remains the root relation; the CTE is an additional
+governed query member rather than a replacement `FROM` source.
 
 ### Window Functions (SQLite 3.25+)
 ```elixir
@@ -144,11 +147,13 @@ selecto
 
 ### Full-Text Search (FTS5)
 ```elixir
-selecto
-|> Selecto.from("articles_fts")
+articles_fts_selecto
 |> Selecto.filter({"articles_fts", {:match, "search terms"}})
 |> Selecto.execute()
 ```
+
+Configure `articles_fts_selecto` with a domain whose
+`source.source_table` is `"articles_fts"`.
 
 ### Attach Database
 ```elixir
@@ -159,9 +164,10 @@ selecto
   []
 )
 
-# Query from attached database
-selecto
-|> Selecto.from("other.table_name")
+# Configure this Selecto instance from a domain whose source table is
+# "other.table_name".
+attached_selecto
+|> Selecto.select(["id"])
 |> Selecto.execute()
 ```
 
