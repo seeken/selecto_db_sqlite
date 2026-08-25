@@ -179,6 +179,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
         path: [:children],
         relation: :children,
         strategy: :ordered,
+        identity_fields: [:id],
         rows: [
           %Row{
             id: "0",
@@ -191,7 +192,8 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
                 from_row: "root",
                 from_field: :id
               }
-            ]
+            ],
+            metadata: %{client_identity: "child-1", semantic_operation: :create}
           }
         ]
       }
@@ -204,9 +206,18 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
               operation: :graph,
               affected_rows: 2,
               rows: [%{"id" => parent_id}],
-              metadata: %{node_strategies: %{"root" => :ordered_fallback}}
+              metadata: %{
+                node_strategies: %{"root" => :ordered_fallback},
+                nested_outcomes: [
+                  %{path: [:children, 0], operation: :create, identity: %{"id" => child_id}}
+                ],
+                identity_mappings: [
+                  %{client_identity: "child-1", identity: %{"id" => mapped_child_id}}
+                ]
+              }
             }} = Write.execute(selecto, graph)
 
+    assert mapped_child_id == child_id
     assert rows!(connection, "SELECT item_id, name FROM children") == [[parent_id, "Child"]]
   end
 
