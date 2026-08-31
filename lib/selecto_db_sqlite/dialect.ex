@@ -6,6 +6,7 @@ defmodule SelectoDBSQLite.Dialect do
   alias Selecto.Dialect.TextSearch.{Predicate, Rank}
   alias Selecto.Dialect.Collection.Operation, as: CollectionOperation
   alias Selecto.Dialect.DateTime.Operation, as: DateTimeOperation
+  alias Selecto.Dialect.Bucket.Expression, as: BucketExpression
   alias Selecto.Dialect.Predicate.Comparison
 
   alias Selecto.Dialect.Json.{
@@ -34,9 +35,274 @@ defmodule SelectoDBSQLite.Dialect do
     do: unsupported_datetime(operation)
 
   @impl true
+  def render_bucket(%BucketExpression{} = bucket, _selecto) do
+    case bucket_sql(bucket) do
+      {:ok, sql} ->
+        {:ok, sql}
+
+      {:error, reason} ->
+        {:error,
+         Selecto.Error.validation_error("Invalid SQLite bucket expression", %{
+           unsupported_feature: :bucket_expression,
+           reason: reason
+         })}
+    end
+  end
+
+  @impl true
   def render_comparison(%Comparison{} = comparison, _selecto) do
     operator = if comparison.operation == :case_insensitive_not_like, do: "NOT LIKE", else: "LIKE"
     {:ok, ["LOWER(", comparison.left, ") ", operator, " LOWER(", comparison.right, ")"]}
+  end
+
+  defp bucket_sql(%BucketExpression{kind: :numeric_ranges} = bucket),
+    do: range_case_sql(bucket.expression, bucket.ranges)
+
+  defp bucket_sql(%BucketExpression{kind: :numeric_increment, increment: increment} = bucket)
+       when is_integer(increment) and increment > 0,
+       do: {:ok, increment_bucket_sql(bucket.expression, increment)}
+
+  defp bucket_sql(%BucketExpression{kind: :year_increment, increment: increment} = bucket)
+       when is_integer(increment) and increment > 0,
+       do:
+         {:ok,
+          increment_bucket_sql(
+            ["CAST(strftime('%Y', ", bucket.expression, ") AS INTEGER)"],
+            increment
+          )}
+
+  defp bucket_sql(%BucketExpression{kind: :year_ranges} = bucket),
+    do:
+      range_case_sql(
+        ["CAST(strftime('%Y', ", bucket.expression, ") AS INTEGER)"],
+        bucket.ranges
+      )
+
+  defp bucket_sql(%BucketExpression{kind: :elapsed_days_ranges} = bucket),
+    do:
+      range_case_sql(
+        ["CAST(julianday('now') - julianday(", bucket.expression, ") AS INTEGER)"],
+        bucket.ranges
+      )
+
+  defp bucket_sql(%BucketExpression{kind: :date_relative_ranges} = bucket),
+    do: date_range_case_sql(["DATE(", bucket.expression, ")"], bucket.ranges)
+
+  defp bucket_sql(%BucketExpression{kind: :text_prefix} = bucket)
+       when is_integer(bucket.prefix_length) and bucket.prefix_length > 0 do
+    normalized = normalized_text(bucket)
+
+    {:ok,
+     [
+       "CASE WHEN ",
+       normalized,
+       " IS NULL OR ",
+       normalized,
+       " = '' THEN 'Other' ELSE UPPER(SUBSTR(",
+       normalized,
+       ", 1, ",
+       Integer.to_string(bucket.prefix_length),
+       ")) END"
+     ]}
+  end
+
+  defp bucket_sql(_bucket), do: {:error, :unsupported_bucket_shape}
+
+  defp increment_bucket_sql(expression, increment_value) do
+    increment = Integer.to_string(increment_value)
+
+    bucket_start = [
+      "CAST(FLOOR(CAST(",
+      expression,
+      " AS REAL) / ",
+      increment,
+      ") AS INTEGER) * ",
+      increment
+    ]
+
+    [
+      "CASE WHEN ",
+      expression,
+      " IS NULL THEN 'Other' ELSE CAST((",
+      bucket_start,
+      ") AS TEXT) || '-' || CAST(((",
+      bucket_start,
+      ") + ",
+      Integer.to_string(increment_value - 1),
+      ") AS TEXT) END"
+    ]
+  end
+
+  defp range_case_sql(expression, ranges) when is_list(ranges) and ranges != [] do
+    ranges
+    |> Enum.map(&range_clause(expression, &1))
+    |> collect_case_clauses()
+  end
+
+  defp range_case_sql(_expression, _ranges), do: {:error, :empty_ranges}
+
+  defp range_clause(expression, {minimum, maximum, label})
+       when is_integer(minimum) and is_integer(maximum) and minimum == maximum,
+       do:
+         {:ok,
+          [
+            "WHEN ",
+            expression,
+            " = ",
+            Integer.to_string(minimum),
+            " THEN '",
+            escape_literal(label),
+            "'"
+          ]}
+
+  defp range_clause(expression, {minimum, maximum, label})
+       when is_integer(minimum) and is_integer(maximum),
+       do:
+         {:ok,
+          [
+            "WHEN ",
+            expression,
+            " >= ",
+            Integer.to_string(minimum),
+            " AND ",
+            expression,
+            " <= ",
+            Integer.to_string(maximum),
+            " THEN '",
+            escape_literal(label),
+            "'"
+          ]}
+
+  defp range_clause(expression, {minimum, :infinity, label}) when is_integer(minimum),
+    do:
+      {:ok,
+       [
+         "WHEN ",
+         expression,
+         " >= ",
+         Integer.to_string(minimum),
+         " THEN '",
+         escape_literal(label),
+         "'"
+       ]}
+
+  defp range_clause(expression, {:negative_infinity, maximum, label}) when is_integer(maximum),
+    do:
+      {:ok,
+       [
+         "WHEN ",
+         expression,
+         " <= ",
+         Integer.to_string(maximum),
+         " THEN '",
+         escape_literal(label),
+         "'"
+       ]}
+
+  defp range_clause(_expression, _range), do: {:error, :invalid_range}
+
+  defp date_range_case_sql(expression, ranges) when is_list(ranges) and ranges != [] do
+    ranges
+    |> Enum.map(&date_range_clause(expression, &1))
+    |> collect_case_clauses()
+  end
+
+  defp date_range_case_sql(_expression, _ranges), do: {:error, :empty_ranges}
+
+  defp date_range_clause(expression, {minimum, maximum, label})
+       when is_integer(minimum) and is_integer(maximum) and minimum == maximum,
+       do:
+         {:ok,
+          [
+            "WHEN ",
+            expression,
+            " = DATE('now', '-",
+            Integer.to_string(minimum),
+            " day') THEN '",
+            escape_literal(label),
+            "'"
+          ]}
+
+  defp date_range_clause(expression, {minimum, maximum, label})
+       when is_integer(minimum) and is_integer(maximum),
+       do:
+         {:ok,
+          [
+            "WHEN ",
+            expression,
+            " BETWEEN DATE('now', '-",
+            Integer.to_string(maximum),
+            " day') AND DATE('now', '-",
+            Integer.to_string(minimum),
+            " day') THEN '",
+            escape_literal(label),
+            "'"
+          ]}
+
+  defp date_range_clause(expression, {minimum, :infinity, label}) when is_integer(minimum),
+    do:
+      {:ok,
+       [
+         "WHEN ",
+         expression,
+         " <= DATE('now', '-",
+         Integer.to_string(minimum),
+         " day') THEN '",
+         escape_literal(label),
+         "'"
+       ]}
+
+  defp date_range_clause(expression, {keyword, keyword, label})
+       when keyword in ["today", "yesterday", "tomorrow"] do
+    modifier = %{"today" => "", "yesterday" => "-1 day", "tomorrow" => "+1 day"}[keyword]
+    date = if modifier == "", do: "DATE('now')", else: "DATE('now', '#{modifier}')"
+    {:ok, ["WHEN ", expression, " = ", date, " THEN '", escape_literal(label), "'"]}
+  end
+
+  defp date_range_clause(_expression, _range), do: {:error, :invalid_range}
+
+  defp collect_case_clauses(results) do
+    case Enum.split_with(results, &match?({:ok, _sql}, &1)) do
+      {successes, []} ->
+        {:ok,
+         ["CASE ", Enum.intersperse(Enum.map(successes, &elem(&1, 1)), " "), " ELSE 'Other' END"]}
+
+      {_successes, _errors} ->
+        {:error, :invalid_range}
+    end
+  end
+
+  defp normalized_text(bucket) do
+    base =
+      if bucket.ignore_case,
+        do: ["LOWER(TRIM(", bucket.expression, "))"],
+        else: ["TRIM(", bucket.expression, ")"]
+
+    if bucket.exclude_articles == [] do
+      base
+    else
+      [
+        "CASE ",
+        "WHEN ",
+        base,
+        " LIKE 'the %' THEN SUBSTR(",
+        base,
+        ", 5) ",
+        "WHEN ",
+        base,
+        " LIKE 'an %' THEN SUBSTR(",
+        base,
+        ", 4) ",
+        "WHEN ",
+        base,
+        " LIKE 'a %' THEN SUBSTR(",
+        base,
+        ", 3) ",
+        "ELSE ",
+        base,
+        " END"
+      ]
+    end
   end
 
   @impl true

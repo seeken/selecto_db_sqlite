@@ -115,9 +115,32 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   @impl true
+  def format_datetime(sel_iodata, "YYYY-MM-DD"),
+    do: ["strftime('%Y-%m-%d', ", sel_iodata, ")"]
+
+  def format_datetime(sel_iodata, "YYYY-MM-DD HH24"),
+    do: ["strftime('%Y-%m-%d %H', ", sel_iodata, ")"]
+
+  def format_datetime(sel_iodata, "YYYY-MM"),
+    do: ["strftime('%Y-%m', ", sel_iodata, ")"]
+
+  def format_datetime(sel_iodata, "YYYY-WW"),
+    do: ["strftime('%Y-%W', ", sel_iodata, ")"]
+
+  def format_datetime(sel_iodata, "YYYY-Q") do
+    [
+      "strftime('%Y', ",
+      sel_iodata,
+      ") || '-' || CAST(((CAST(strftime('%m', ",
+      sel_iodata,
+      ") AS INTEGER) - 1) / 3 + 1) AS INTEGER)"
+    ]
+  end
+
   def format_datetime(sel_iodata, "YYYY"), do: ["strftime('%Y', ", sel_iodata, ")"]
   def format_datetime(sel_iodata, "MM"), do: ["strftime('%m', ", sel_iodata, ")"]
   def format_datetime(sel_iodata, "DD"), do: ["strftime('%d', ", sel_iodata, ")"]
+  def format_datetime(sel_iodata, "D"), do: ["strftime('%w', ", sel_iodata, ")"]
   def format_datetime(sel_iodata, "HH24"), do: ["strftime('%H', ", sel_iodata, ")"]
   def format_datetime(sel_iodata, _format), do: ["CAST(", sel_iodata, " AS TEXT)"]
 
