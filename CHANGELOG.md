@@ -4,6 +4,8 @@
 
 - Added explicitly granted scalar-array contains/any/all predicates with native
   parameterized JSON membership, strict types, whole-array bounds, and set semantics.
+- Validate bounded UTF-8 bytes natively before scalar-array membership, including
+  malformed encodings that SQLite can otherwise retain as text.
 
 - Added explicitly granted root count and integer sum/min/max with native SQL
   totals, bounded same-statement validation evidence, and exact empty/null behavior.

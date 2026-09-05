@@ -27,11 +27,42 @@ defmodule SelectoDBSQLite.DocumentScalarArray do
     {sql, [Jason.encode!(members)]}
   end
 
-  defp element_guard("string"),
-    do: "item.type = 'text' AND length(CAST(item.value AS BLOB)) <= 16384"
+  defp element_guard("string") do
+    "CASE WHEN item.type = 'text' AND length(CAST(item.value AS BLOB)) <= 16384 " <>
+      "THEN (#{valid_utf8()}) ELSE 0 END"
+  end
 
   defp element_guard("integer"),
     do: "item.type = 'integer' AND item.value BETWEEN -9007199254740991 AND 9007199254740991"
 
   defp element_guard("boolean"), do: "item.type IN ('true', 'false')"
+
+  # SQLite's JSON parser can retain malformed UTF-8. Validate bytes natively
+  # before membership, including surrogate, overlong and >U+10FFFF exclusions.
+  # Only a position is recursive; the bounded hex value is materialized once.
+  defp valid_utf8 do
+    ranges = [
+      {2, "[0-7][0-9A-F]"},
+      {4, "C[2-9A-F][89AB][0-9A-F]"},
+      {4, "D[0-9A-F][89AB][0-9A-F]"},
+      {6, "E0[AB][0-9A-F][89AB][0-9A-F]"},
+      {6, "E[123456789ABCEF][89AB][0-9A-F][89AB][0-9A-F]"},
+      {6, "ED[89][0-9A-F][89AB][0-9A-F]"},
+      {8, "F0[9AB][0-9A-F][89AB][0-9A-F][89AB][0-9A-F]"},
+      {8, "F[123][89AB][0-9A-F][89AB][0-9A-F][89AB][0-9A-F]"},
+      {8, "F48[0-9A-F][89AB][0-9A-F][89AB][0-9A-F]"}
+    ]
+
+    step =
+      Enum.map_join(ranges, " ", fn {width, pattern} ->
+        "WHEN substr(bytes, pos, #{width}) GLOB '#{pattern}' THEN pos + #{width}"
+      end)
+
+    "EXISTS (WITH RECURSIVE " <>
+      "encoded(bytes, size) AS MATERIALIZED (SELECT hex(CAST(item.value AS BLOB)), " <>
+      "2 * length(CAST(item.value AS BLOB))), " <>
+      "walk(pos) AS (SELECT 1 UNION ALL SELECT CASE #{step} ELSE 0 END " <>
+      "FROM walk, encoded WHERE pos > 0 AND pos <= size) " <>
+      "SELECT 1 FROM walk, encoded WHERE pos = size + 1)"
+  end
 end

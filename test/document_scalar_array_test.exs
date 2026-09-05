@@ -250,6 +250,59 @@ defmodule SelectoDBSQLite.DocumentScalarArrayTest do
     end
   end
 
+  test "native byte validation rejects malformed UTF-8 without treating it as a valid empty operand match",
+       %{db: db, release: rel} do
+    valid = [
+      "",
+      <<0>>,
+      <<0x7F>>,
+      "é😀",
+      <<0xC2, 0x80>>,
+      <<0xDF, 0xBF>>,
+      <<0xE0, 0xA0, 0x80>>,
+      <<0xED, 0x9F, 0xBF>>,
+      <<0xEE, 0x80, 0x80>>,
+      <<0xF0, 0x90, 0x80, 0x80>>,
+      <<0xF4, 0x8F, 0xBF, 0xBF>>
+    ]
+
+    invalid = [
+      <<0xFF>>,
+      <<0x80>>,
+      <<0xC0, 0x80>>,
+      <<0xC1, 0xBF>>,
+      <<0xC2>>,
+      <<0xE0, 0x80, 0x80>>,
+      <<0xE2, 0x82>>,
+      <<0xED, 0xA0, 0x80>>,
+      <<0xED, 0xBF, 0xBF>>,
+      <<0xF0, 0x80, 0x80, 0x80>>,
+      <<0xF4, 0x90, 0x80, 0x80>>,
+      <<0xF5, 0x80, 0x80, 0x80>>,
+      <<0xF0, 0x90, 0x80>>
+    ]
+
+    for {value, index} <- Enum.with_index(valid ++ invalid) do
+      id = "utf8-#{String.pad_leading(Integer.to_string(index), 2, "0")}"
+      assert {:ok, _} = insert(db, doc(id, "tags", []))
+
+      assert {:ok, _} =
+               Adapter.execute(
+                 db,
+                 "UPDATE work_orders SET document = json_set(document, '$.tags', json_array('urgent', CAST(? AS TEXT))) WHERE json_extract(document, '$._id') = ?",
+                 [value, id],
+                 []
+               )
+    end
+
+    expected =
+      for index <- 0..(length(valid) - 1),
+          do: "utf8-#{String.pad_leading(Integer.to_string(index), 2, "0")}"
+
+    assert ids(db, rel, member("tags", "contains_all", [])) == expected
+    assert ids(db, rel, member("tags", "contains", "urgent")) == expected
+  end
+
   defp shape do
     Fixtures.scalar_array_shape()
     |> put_in(["shape", "fields", "tags", "scalar_array", "max_elements"], 4)

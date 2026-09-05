@@ -238,7 +238,9 @@ bound (maximum 1,000); invalid or missing/null arrays do not match. No truncated
 prefix is accepted. Duplicate values have set semantics. An empty requested
 `contains_any` set is false; an empty `contains_all` set is true only for a valid
 array, including an empty array. Strings use binary comparison and a 16,384-byte
-bound, integers use the portable signed 53-bit range, and booleans do not coerce
+bound. A bounded native byte walk rejects malformed UTF-8, surrogate encodings,
+overlong sequences and values above U+10FFFF while preserving embedded nulls.
+Integers use the portable signed 53-bit range, and booleans do not coerce
 to integers. Floating-point and nested/object elements remain unsupported.
 
 If another predicate branch selects an invalid document, full ShapeRelease
