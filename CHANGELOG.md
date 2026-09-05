@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Reject releases containing native ObjectId fields, including unselected fields
+  and counts, at capability preflight and direct document compilation.
+
+- Added optional owned object relations with native predicates, tenant-scoped
+  parent identity, same-input whole-parent validation, and duplicate-parent
+  rejection. Root reads and counts enforce the new object shape refinements.
+
 - Added explicitly granted scalar-array contains/any/all predicates with native
   parameterized JSON membership, strict types, whole-array bounds, and set semantics.
 - Validate bounded UTF-8 bytes natively before scalar-array membership, including

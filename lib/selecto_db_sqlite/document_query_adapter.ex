@@ -3,14 +3,15 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
   SQL control for the portable document query plan using a SQLite JSON `document`
   column. The host creates the table and declared expression index explicitly.
   This additive adapter leaves existing Selecto SQL APIs unchanged. V1 supports
-  root/nested projections; array relations fail capability preflight.
+  root/nested projections and parent-scoped optional object relations; array
+  relations and native ObjectId fields fail capability preflight.
   """
   @behaviour Selecto.DB.QueryAdapter
   alias Selecto.Document.{Path, ShapeRelease}
   alias Selecto.Query.{CapabilityProfile, Compiled, Cursor, Plan, Result}
-  alias SelectoDBSQLite.{Adapter, DocumentAggregate, DocumentScalarArray}
+  alias SelectoDBSQLite.{Adapter, DocumentAggregate, DocumentObjectRelation, DocumentScalarArray}
 
-  @caps ~w(document.root document.nested query.ordering query.cursor query.limit
+  @caps ~w(document.root document.nested document.object_relation query.ordering query.cursor query.limit
            document.scalar_array predicate.contains predicate.contains_any predicate.contains_all
            query.aggregate.count query.aggregate.sum query.aggregate.min query.aggregate.max
            predicate.eq predicate.ne predicate.gt predicate.gte predicate.lt predicate.lte
@@ -48,19 +49,18 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
   @impl true
   def compile_query(_connection, plan, opts) do
     with :ok <- Plan.validate(plan, opts),
-         true <- plan.relation["kind"] == "root",
+         false <- "object_id" in ShapeRelease.features(plan.release),
+         true <- plan.relation["kind"] in ["root", "object"],
          table when is_binary(table) <- plan.source["sql_table"],
          true <- Path.safe_key?(table),
          index when is_binary(index) <- plan.metadata["access_pattern"]["index"],
          true <- Path.safe_key?(index) do
-      {where, params} = predicate(plan.predicates)
-
       source =
         "FROM #{quote_id(table)} INDEXED BY #{quote_id(index)} " <>
           "WHERE #{json_type(plan.source["tenant_path"])} = 'text' AND " <>
-          "#{extract(plan.source["tenant_path"])} = ? AND (#{where})"
+          "#{extract(plan.source["tenant_path"])} = ?"
 
-      {artifact, metadata} = compile_artifact(plan, source, [plan.tenant | params])
+      {artifact, metadata} = compile_source(plan, source)
 
       {:ok,
        %Compiled{
@@ -72,6 +72,28 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
     else
       _ -> error("Unsupported SQLite document query contract")
     end
+  end
+
+  defp compile_source(%{relation: %{"kind" => "object"}} = plan, source) do
+    source =
+      source <>
+        " AND #{json_type(plan.source["identity_path"])} = 'text' AND " <>
+        "#{extract(plan.source["identity_path"])} = ?"
+
+    child_predicate = predicate(prefix_predicate(plan.predicates, plan.relation["path"]))
+
+    DocumentObjectRelation.compile(
+      plan,
+      source,
+      [plan.tenant, plan.relation["parent_identity"]],
+      child_predicate,
+      json_type(plan.relation["path"])
+    )
+  end
+
+  defp compile_source(plan, source) do
+    {where, params} = predicate(plan.predicates)
+    compile_artifact(plan, source <> " AND (#{where})", [plan.tenant | params])
   end
 
   defp compile_artifact(%{aggregates: [_ | _]} = plan, source, params),
@@ -151,6 +173,9 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
   defp normalize(rows, %{plan: %{aggregates: [_ | _]}} = compiled, _opts),
     do: DocumentAggregate.normalize(rows, compiled)
 
+  defp normalize(rows, %{plan: %{relation: %{"kind" => "object"}}} = compiled, _opts),
+    do: DocumentObjectRelation.normalize(rows, compiled)
+
   defp normalize(rows, compiled, opts) do
     with {:ok, documents} <- decode(rows, compiled.plan.release),
          {:ok, cursor} <- next_cursor(documents, compiled.plan, opts) do
@@ -193,6 +218,14 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
       {:ok, nil}
     end
   end
+
+  defp prefix_predicate(nil, _prefix), do: nil
+
+  defp prefix_predicate(%{"args" => args} = predicate, prefix),
+    do: Map.put(predicate, "args", Enum.map(args, &prefix_predicate(&1, prefix)))
+
+  defp prefix_predicate(%{"field" => field} = predicate, prefix),
+    do: Map.put(predicate, "field", Map.put(field, "path", prefix ++ field["path"]))
 
   defp predicate(nil), do: {"1", []}
 

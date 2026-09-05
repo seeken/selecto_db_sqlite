@@ -183,7 +183,8 @@ attached_selecto
 ## Experimental document query control
 
 `SelectoDBSQLite.DocumentQueryAdapter` lowers the new portable document plan to
-parameterized SQLite JSON SQL. It supports the shared root/nested-field slice;
+parameterized SQLite JSON SQL. It supports root/nested fields and optional owned
+object relations;
 array relation execution is explicitly unsupported in this SQL control. It
 requires the development Selecto source-query API, which is not yet a separately
 published version.
@@ -248,8 +249,33 @@ validation still rejects it. Even count queries require `document.scalar_array`
 when the release declares typed arrays; older adapters cannot ignore these
 refinements. SQLite still does not execute identified-child relations.
 
+An approved `kind: "object"` relation exposes one owned embedded object through
+published object-relative fields. `Fixtures.object_relation_release/0` publishes
+`work_order_schedule`; query it with a required `parent_identity` and trusted
+tenant context. Results contain zero or one row, with the parent identity in
+`metadata["relation_identity"]`. No synthetic identity column is added. Missing
+or null objects produce no row only when the approved shape permits them; a
+valid empty object still produces one row. Cursors, ordering, aggregates, and
+limits other than one are unsupported for this relation.
+
+A materialized CTE selects at most two parents under the tenant and identity
+index. Duplicate parents fail cardinality validation. Native SQL evaluates the
+child predicate against this same input, while complete parent evidence is
+validated before its match flag is honored. A false predicate cannot hide an
+invalid parent, child object, or typed array. Parent evidence and returned rows
+must fit the byte bound; this is not a hard limit on SQLite's internal parsing
+or storage memory. Root reads and counts also validate owned object fields, and
+the release-wide `document.object_relation` capability prevents an older adapter
+from ignoring them. Existing writes and array relation support are unchanged.
+
+Native `object_id` fields require `document.object_id`, which this SQLite JSON
+control does not advertise. Any release containing that type is rejected,
+including counts and projections that omit the field. Direct compilation also
+rejects it; tagged JSON values are not treated as native BSON identities.
+
 The executable controls are `test/document_query_adapter_test.exs`,
-`test/document_aggregate_test.exs`, and `test/document_scalar_array_test.exs`. This uses
+`test/document_aggregate_test.exs`, `test/document_scalar_array_test.exs`, and
+`test/document_object_relation_test.exs`. This uses
 SQLite's documented [JSON functions](https://www.sqlite.org/json1.html) and proves
 the named synthetic subset, not general document database portability.
 
