@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added explicitly granted scalar-array contains/any/all predicates with native
+  parameterized JSON membership, strict types, whole-array bounds, and set semantics.
+
 - Added explicitly granted root count and integer sum/min/max with native SQL
   totals, bounded same-statement validation evidence, and exact empty/null behavior.
 

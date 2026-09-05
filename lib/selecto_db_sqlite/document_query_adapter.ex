@@ -8,9 +8,10 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
   @behaviour Selecto.DB.QueryAdapter
   alias Selecto.Document.{Path, ShapeRelease}
   alias Selecto.Query.{CapabilityProfile, Compiled, Cursor, Plan, Result}
-  alias SelectoDBSQLite.{Adapter, DocumentAggregate}
+  alias SelectoDBSQLite.{Adapter, DocumentAggregate, DocumentScalarArray}
 
   @caps ~w(document.root document.nested query.ordering query.cursor query.limit
+           document.scalar_array predicate.contains predicate.contains_any predicate.contains_all
            query.aggregate.count query.aggregate.sum query.aggregate.min query.aggregate.max
            predicate.eq predicate.ne predicate.gt predicate.gte predicate.lt predicate.lte
            predicate.in predicate.exists predicate.missing predicate.is_null predicate.is_not_null
@@ -204,6 +205,11 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
       end)
 
     {sql, Enum.flat_map(compiled, &elem(&1, 1))}
+  end
+
+  defp predicate(%{"op" => op, "field" => field} = intent)
+       when op in ~w(contains contains_any contains_all) do
+    DocumentScalarArray.predicate(intent, json_path(field["path"]))
   end
 
   defp predicate(%{"op" => op, "field" => field} = intent) do

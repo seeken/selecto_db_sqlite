@@ -222,8 +222,32 @@ total is returned. Sum inputs must have absolute value at most
 `floor(9007199254740991 / max_input_rows)`; min/max inputs use the full portable
 integer range. Validation evidence is bounded local work; totals are native SQL.
 
-The executable controls are `test/document_query_adapter_test.exs` and
-`test/document_aggregate_test.exs`. This uses
+Typed scalar-array fields may explicitly grant `contains`, `contains_any`, and
+`contains_all` through a `scalar_array` descriptor. The separate
+`Selecto.Document.Fixtures.scalar_array_release/0` demonstrates string, integer,
+and boolean elements. These grants remain independent of ordinary `filterable`
+and `sortable` permissions. For example:
+
+```elixir
+%{"where" => %{"field" => "tags", "op" => "contains_any", "value" => ["urgent", "routine"]}}
+```
+
+Membership executes natively through parameterized `json_each` expressions.
+Arrays must be present, wholly well typed, and within their declared element
+bound (maximum 1,000); invalid or missing/null arrays do not match. No truncated
+prefix is accepted. Duplicate values have set semantics. An empty requested
+`contains_any` set is false; an empty `contains_all` set is true only for a valid
+array, including an empty array. Strings use binary comparison and a 16,384-byte
+bound, integers use the portable signed 53-bit range, and booleans do not coerce
+to integers. Floating-point and nested/object elements remain unsupported.
+
+If another predicate branch selects an invalid document, full ShapeRelease
+validation still rejects it. Even count queries require `document.scalar_array`
+when the release declares typed arrays; older adapters cannot ignore these
+refinements. SQLite still does not execute identified-child relations.
+
+The executable controls are `test/document_query_adapter_test.exs`,
+`test/document_aggregate_test.exs`, and `test/document_scalar_array_test.exs`. This uses
 SQLite's documented [JSON functions](https://www.sqlite.org/json1.html) and proves
 the named synthetic subset, not general document database portability.
 
