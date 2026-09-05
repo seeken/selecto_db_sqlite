@@ -208,7 +208,22 @@ temporary sorts. Projection is bounded result normalization after SQL filters,
 ordering and pagination. It validates fetched documents against the approved
 release and retains missing values distinctly from null.
 
-The executable control is `test/document_query_adapter_test.exs`. This uses
+Approved root aggregates use `%{"aggregate" => [%{"op" => "count", "as" => "total"}]}` or explicit integer `sum`, `min`, and `max` grants.
+`Selecto.Document.Fixtures.aggregate_release/0` is a separate synthetic release
+with these grants; older releases do not grant aggregates implicitly. Aggregates
+return exactly one row, with count zero and numeric totals null on empty input.
+Missing and null numeric inputs are excluded. Row selection and cursor options
+cannot be combined with aggregates.
+
+A materialized candidate CTE caps matching input at `max_input_rows + 1` and
+feeds both native SQL totals and local shape/integer validation evidence in the
+same statement. Exceeding the input or byte bound rejects the query. No partial
+total is returned. Sum inputs must have absolute value at most
+`floor(9007199254740991 / max_input_rows)`; min/max inputs use the full portable
+integer range. Validation evidence is bounded local work; totals are native SQL.
+
+The executable controls are `test/document_query_adapter_test.exs` and
+`test/document_aggregate_test.exs`. This uses
 SQLite's documented [JSON functions](https://www.sqlite.org/json1.html) and proves
 the named synthetic subset, not general document database portability.
 

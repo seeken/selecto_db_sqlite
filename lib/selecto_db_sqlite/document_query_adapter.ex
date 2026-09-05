@@ -8,9 +8,10 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
   @behaviour Selecto.DB.QueryAdapter
   alias Selecto.Document.{Path, ShapeRelease}
   alias Selecto.Query.{CapabilityProfile, Compiled, Cursor, Plan, Result}
-  alias SelectoDBSQLite.Adapter
+  alias SelectoDBSQLite.{Adapter, DocumentAggregate}
 
   @caps ~w(document.root document.nested query.ordering query.cursor query.limit
+           query.aggregate.count query.aggregate.sum query.aggregate.min query.aggregate.max
            predicate.eq predicate.ne predicate.gt predicate.gte predicate.lt predicate.lte
            predicate.in predicate.exists predicate.missing predicate.is_null predicate.is_not_null
            predicate.and predicate.or)
@@ -31,6 +32,7 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
          certified: @caps,
          limits: %{
            "max_rows" => 1000,
+           "max_input_rows" => 10_000,
            "max_bytes" => 16_777_216,
            "timeout_ms" => 30_000,
            "max_predicates" => 128
@@ -51,38 +53,52 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
          index when is_binary(index) <- plan.metadata["access_pattern"]["index"],
          true <- Path.safe_key?(index) do
       {where, params} = predicate(plan.predicates)
-      {after_sql, after_params} = after_predicate(plan)
-      tenant = extract(plan.source["tenant_path"])
 
-      order =
-        Enum.map_join(plan.ordering, ", ", fn entry ->
-          extract(entry["field"]["path"]) <>
-            if(entry["direction"] == "desc", do: " DESC", else: " ASC")
-        end)
+      source =
+        "FROM #{quote_id(table)} INDEXED BY #{quote_id(index)} " <>
+          "WHERE #{json_type(plan.source["tenant_path"])} = 'text' AND " <>
+          "#{extract(plan.source["tenant_path"])} = ? AND (#{where})"
 
-      sql =
-        "SELECT document FROM #{quote_id(table)} INDEXED BY #{quote_id(index)} " <>
-          "WHERE #{tenant} = ? AND (#{where}) AND (#{after_sql}) ORDER BY #{order} LIMIT ?"
+      {artifact, metadata} = compile_artifact(plan, source, [plan.tenant | params])
 
       {:ok,
        %Compiled{
          backend: :sqlite_json,
          plan: plan,
-         artifact: %{
-           sql: sql,
-           params: [plan.tenant] ++ params ++ after_params ++ [plan.page["limit"] + 1]
-         },
-         metadata: %{
-           "operation" => "select",
-           "index" => index,
-           "residual" => [],
-           "bounds" => plan.bounds,
-           "parameter_count" => 2 + length(params) + length(after_params)
-         }
+         artifact: artifact,
+         metadata: Map.merge(metadata, %{"index" => index, "bounds" => plan.bounds})
        }}
     else
       _ -> error("Unsupported SQLite document query contract")
     end
+  end
+
+  defp compile_artifact(%{aggregates: [_ | _]} = plan, source, params),
+    do: DocumentAggregate.compile(plan, source, params)
+
+  defp compile_artifact(plan, source, params) do
+    {after_sql, after_params} = after_predicate(plan)
+
+    order =
+      Enum.map_join(plan.ordering, ", ", fn entry ->
+        extract(entry["field"]["path"]) <>
+          if(entry["direction"] == "desc", do: " DESC", else: " ASC")
+      end)
+
+    sql =
+      "SELECT document #{source} AND (#{after_sql}) ORDER BY #{order} LIMIT ?"
+
+    {
+      %{
+        sql: sql,
+        params: params ++ after_params ++ [plan.page["limit"] + 1]
+      },
+      %{
+        "operation" => "select",
+        "residual" => ["shape_validation", "projection_normalization"],
+        "parameter_count" => 1 + length(params) + length(after_params)
+      }
+    }
   end
 
   @impl true
@@ -123,7 +139,19 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
              timeout: compiled.plan.bounds["timeout_ms"]
            ),
          true <- :erlang.external_size(rows) <= compiled.plan.bounds["max_bytes"],
-         {:ok, documents} <- decode(rows, compiled.plan.release),
+         {:ok, result} <- normalize(rows, compiled, opts) do
+      {:ok, result}
+    else
+      {:error, %Selecto.Error{} = failure} -> {:error, failure}
+      _ -> error("SQLite document query failed validation, execution, or resource bounds")
+    end
+  end
+
+  defp normalize(rows, %{plan: %{aggregates: [_ | _]}} = compiled, _opts),
+    do: DocumentAggregate.normalize(rows, compiled)
+
+  defp normalize(rows, compiled, opts) do
+    with {:ok, documents} <- decode(rows, compiled.plan.release),
          {:ok, cursor} <- next_cursor(documents, compiled.plan, opts) do
       selected = Enum.take(documents, compiled.plan.page["limit"])
 
@@ -137,9 +165,6 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
          next_cursor: cursor,
          metadata: compiled.metadata
        }}
-    else
-      {:error, %Selecto.Error{} = failure} -> {:error, failure}
-      _ -> error("SQLite document query failed validation, execution, or resource bounds")
     end
   end
 

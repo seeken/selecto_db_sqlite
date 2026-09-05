@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added explicitly granted root count and integer sum/min/max with native SQL
+  totals, bounded same-statement validation evidence, and exact empty/null behavior.
+
 - Added an experimental JSON document query adapter for Selecto's source-query
   plan, with exact missing/null behavior, trusted tenant scope, signed cursors
   and verified index-backed root ordering. Existing SQL APIs are unchanged.
