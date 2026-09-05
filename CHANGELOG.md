@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added an experimental JSON document query adapter for Selecto's source-query
+  plan, with exact missing/null behavior, trusted tenant scope, signed cursors
+  and verified index-backed root ordering. Existing SQL APIs are unchanged.
+
 ## 0.5.0 - 2026-08-14
 
 - Removed renderer aliases for the retired `json_extract_path` and

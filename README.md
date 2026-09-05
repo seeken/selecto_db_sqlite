@@ -180,6 +180,38 @@ attached_selecto
 5. **Use prepared statements** for repeated queries
 6. **Consider in-memory** databases for temporary data
 
+## Experimental document query control
+
+`SelectoDBSQLite.DocumentQueryAdapter` lowers the new portable document plan to
+parameterized SQLite JSON SQL. It supports the shared root/nested-field slice;
+array relation execution is explicitly unsupported in this SQL control. It
+requires the development Selecto source-query API, which is not yet a separately
+published version.
+
+The host supplies a table declared in `ShapeRelease.source.sql_table`, with a
+JSON text `document` column and the declared expression index. For the synthetic
+work-order release, explicit fixture setup is:
+
+```sql
+CREATE TABLE work_orders (document TEXT NOT NULL);
+CREATE UNIQUE INDEX tenant_identity ON work_orders (
+  json_extract(document, '$."tenant_id"'),
+  json_extract(document, '$."_id"')
+);
+```
+
+Insert `Selecto.Document.Fixtures.work_orders/0` as JSON with bound parameters,
+then execute an approved plan through
+`Selecto.execute_plan(plan, SelectoDBSQLite.DocumentQueryAdapter, connection,
+cursor_secret: host_key)`. The adapter verifies an indexed search and rejects
+temporary sorts. Projection is bounded result normalization after SQL filters,
+ordering and pagination. It validates fetched documents against the approved
+release and retains missing values distinctly from null.
+
+The executable control is `test/document_query_adapter_test.exs`. This uses
+SQLite's documented [JSON functions](https://www.sqlite.org/json1.html) and proves
+the named synthetic subset, not general document database portability.
+
 ## License
 
 Apache 2.0
