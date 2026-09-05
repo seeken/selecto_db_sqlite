@@ -39,7 +39,8 @@ defmodule SelectoDBSQLite.DocumentScalarArray do
 
   # SQLite's JSON parser can retain malformed UTF-8. Validate bytes natively
   # before membership, including surrogate, overlong and >U+10FFFF exclusions.
-  # Only a position is recursive; the bounded hex value is materialized once.
+  # Only a position is recursive; BLOB offsets avoid rescanning a TEXT prefix
+  # on every step, so work is linear in the bounded byte count.
   defp valid_utf8 do
     ranges = [
       {2, "[0-7][0-9A-F]"},
@@ -55,11 +56,11 @@ defmodule SelectoDBSQLite.DocumentScalarArray do
 
     step =
       Enum.map_join(ranges, " ", fn {width, pattern} ->
-        "WHEN substr(bytes, pos, #{width}) GLOB '#{pattern}' THEN pos + #{width}"
+        "WHEN CAST(substr(bytes, pos, #{width}) AS TEXT) GLOB '#{pattern}' THEN pos + #{width}"
       end)
 
     "EXISTS (WITH RECURSIVE " <>
-      "encoded(bytes, size) AS MATERIALIZED (SELECT hex(CAST(item.value AS BLOB)), " <>
+      "encoded(bytes, size) AS MATERIALIZED (SELECT CAST(hex(CAST(item.value AS BLOB)) AS BLOB), " <>
       "2 * length(CAST(item.value AS BLOB))), " <>
       "walk(pos) AS (SELECT 1 UNION ALL SELECT CASE #{step} ELSE 0 END " <>
       "FROM walk, encoded WHERE pos > 0 AND pos <= size) " <>
