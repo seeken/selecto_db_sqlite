@@ -49,7 +49,11 @@ defmodule SelectoDBSQLite.DocumentQueryAdapter do
   @impl true
   def compile_query(_connection, plan, opts) do
     with :ok <- Plan.validate(plan, opts),
-         false <- "object_id" in ShapeRelease.features(plan.release),
+         true <-
+           Enum.all?(
+             ShapeRelease.features(plan.release),
+             &(&1 in ~w(object_relation scalar_array))
+           ),
          true <- plan.relation["kind"] in ["root", "object"],
          table when is_binary(table) <- plan.source["sql_table"],
          true <- Path.safe_key?(table),
