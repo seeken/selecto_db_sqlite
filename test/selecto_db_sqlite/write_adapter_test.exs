@@ -2,7 +2,20 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
   use ExUnit.Case, async: false
 
   alias Selecto.Write
-  alias Selecto.Write.{AdapterConformance, Batch, Command, Error, Graph, Result}
+
+  alias Selecto.Write.{
+    AdapterConformance,
+    Batch,
+    CandidateRequest,
+    CandidateState,
+    Command,
+    Error,
+    Graph,
+    RecordRequest,
+    RecordState,
+    Result
+  }
+
   alias Selecto.Write.Graph.{Binding, Node, Row}
   alias SelectoDBSQLite.Adapter
 
@@ -111,6 +124,108 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
 
     assert {:ok, %Result{affected_rows: 1, rows: [%{"id" => ^id}]}} =
              Write.execute(selecto, delete)
+  end
+
+  test "loads protected root state before executing a prepared update", %{connection: connection} do
+    execute!(
+      connection,
+      "INSERT INTO items (tenant_id, external_id, name) VALUES (7, 'prepared', 'Before')"
+    )
+
+    update =
+      command!(%{
+        operation: :update,
+        relation: :items,
+        assignments: [%{field: :name, value: {:literal, "After"}}],
+        predicate:
+          {:and,
+           [
+             {:eq, {:field, :tenant_id}, {:literal, 7}},
+             {:eq, {:field, :external_id}, {:literal, "prepared"}}
+           ]},
+        expected_cardinality: {:exactly, 1},
+        returning: [:name]
+      })
+
+    request = %RecordRequest{
+      operation: :update,
+      relation: :items,
+      predicate: update.predicate,
+      fields: ["tenant_id", "external_id", "name"]
+    }
+
+    prepare = fn loader ->
+      assert {:ok,
+              %RecordState{
+                complete?: true,
+                protection: :locked,
+                values: %{"external_id" => "prepared", "name" => "Before", "tenant_id" => 7}
+              }} = loader.(request)
+
+      {:ok, update, %{}}
+    end
+
+    assert {:ok, %Result{operation: :update, affected_rows: 1}} =
+             Adapter.execute_prepared_write(connection, prepare)
+  end
+
+  test "loads bounded protected child state before a prepared update", %{connection: connection} do
+    execute!(
+      connection,
+      "INSERT INTO items (tenant_id, external_id, name) VALUES (7, 'candidate', 'Parent')"
+    )
+
+    assert {:ok, %{rows: [[item_id]]}} =
+             Adapter.execute(
+               connection,
+               "SELECT id FROM items WHERE external_id = 'candidate'",
+               [],
+               []
+             )
+
+    execute!(
+      connection,
+      "INSERT INTO children (tenant_id, item_id, name) VALUES (7, ?, 'Child')",
+      [item_id]
+    )
+
+    parent =
+      command!(%{
+        operation: :update,
+        relation: :items,
+        assignments: [%{field: :name, value: {:literal, "Parent after"}}],
+        predicate: {:eq, {:field, :id}, {:literal, item_id}},
+        expected_cardinality: {:exactly, 1},
+        returning: :none
+      })
+
+    request = %CandidateRequest{
+      operation: :update,
+      representation: :delta,
+      relationship: "children",
+      path: [:children],
+      parent_command: parent,
+      parent_key: :id,
+      child_relation: :children,
+      child_key: :item_id,
+      identity_fields: ["id"],
+      fields: ["id", "name"],
+      max_rows: 1
+    }
+
+    prepare = fn loader ->
+      assert {:ok,
+              %CandidateState{
+                complete?: true,
+                protection: :locked,
+                rows: [%{"id" => _, "name" => "Child"}]
+              }} = loader.(request)
+
+      {:ok, parent, %{}}
+    end
+
+    assert {:ok, %Result{operation: :update, affected_rows: 1}} =
+             Adapter.execute_prepared_write(connection, prepare)
   end
 
   test "rolls back a cardinality mismatch", %{connection: connection, selecto: selecto} do

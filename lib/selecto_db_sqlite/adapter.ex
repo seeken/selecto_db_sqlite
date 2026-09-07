@@ -6,7 +6,20 @@ defmodule SelectoDBSQLite.Adapter do
   @behaviour Selecto.DB.Adapter
   @behaviour Selecto.DB.WriteAdapter
 
-  alias Selecto.Write.{Batch, Command, Error, Graph, Preview, Result}
+  alias Selecto.Write.{
+    Batch,
+    CandidateRequest,
+    CandidateState,
+    Capabilities,
+    Command,
+    Error,
+    Graph,
+    Preview,
+    RecordRequest,
+    RecordState,
+    Result
+  }
+
   alias Selecto.Write.Graph.Materializer
   alias SelectoDBSQLite.WriteCompiler
 
@@ -190,6 +203,7 @@ defmodule SelectoDBSQLite.Adapter do
       transactions: true,
       atomic_batch: true,
       write_graph: returning?,
+      prepared_candidate_state: true,
       merge: false,
       dialect: :sqlite,
       server_version: version
@@ -237,6 +251,90 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   def execute_write(_connection, write, _opts), do: invalid_write_input(write)
+
+  @impl Selecto.DB.WriteAdapter
+  def execute_prepared_write(connection, prepare_fun, opts \\ [])
+
+  def execute_prepared_write(connection, prepare_fun, opts)
+      when is_function(prepare_fun, 1) do
+    with_write_transaction(connection, opts, fn tx ->
+      loader = &load_prepared_state(tx, &1, opts)
+
+      with {:ok, write, context} <- prepare_fun.(loader),
+           :ok <- validate_prepared_write(write),
+           :ok <- Capabilities.require(write_capabilities(tx), write) do
+        execute_prepared(tx, write, Keyword.put(opts, :context, context))
+      else
+        {:error, %Error{} = error} -> {:error, error}
+        {:error, reason} -> {:error, write_error(:candidate_preparation_failed, reason)}
+        other -> {:error, write_error(:candidate_preparation_failed, other)}
+      end
+    end)
+  end
+
+  def execute_prepared_write(_connection, prepare_fun, _opts) do
+    {:error,
+     Error.new(:invalid_preparation, "prepared write requires a one-argument function",
+       details: %{actual: prepare_fun}
+     )}
+  end
+
+  @doc false
+  def load_record_state(connection, %RecordRequest{} = request, opts \\ []) do
+    with :ok <- valid_record_request(request),
+         {:ok, predicate} <-
+           WriteCompiler.compile_predicate(request.predicate, context: request.context),
+         fields = request.fields |> Enum.map(&to_string/1) |> Enum.uniq() |> Enum.sort(),
+         query =
+           "SELECT #{Enum.map_join(fields, ", ", &quote_identifier/1)} FROM " <>
+             "#{quote_relation(request.relation)} WHERE #{predicate.text}",
+         {:ok, result} <- execute(connection, query, predicate.params, opts),
+         {:ok, values} <- exactly_one_record(result) do
+      {:ok, %RecordState{values: values, complete?: true, protection: :locked}}
+    end
+  end
+
+  @doc false
+  def load_candidate_state(connection, %CandidateRequest{} = request, opts \\ []) do
+    with :ok <- valid_candidate_request(request),
+         {:ok, predicate} <-
+           WriteCompiler.compile_predicate(request.parent_command.predicate,
+             context: request.context
+           ),
+         parent_query =
+           "SELECT #{quote_identifier(request.parent_key)} FROM " <>
+             "#{quote_relation(request.parent_command.relation)} WHERE #{predicate.text}",
+         {:ok, parent_result} <- execute(connection, parent_query, predicate.params, opts),
+         {:ok, parent_id} <- exactly_one_parent(parent_result),
+         fields =
+           (request.fields ++ request.identity_fields)
+           |> Enum.map(&to_string/1)
+           |> Enum.uniq()
+           |> Enum.sort(),
+         child_query =
+           "SELECT #{Enum.map_join(fields, ", ", &quote_identifier/1)} FROM " <>
+             "#{quote_relation(request.child_relation)} WHERE #{quote_identifier(request.child_key)} = ? " <>
+             "ORDER BY #{Enum.map_join(request.identity_fields, ", ", &quote_identifier/1)} LIMIT ?",
+         {:ok, child_result} <-
+           execute(connection, child_query, [parent_id, request.max_rows + 1], opts),
+         :ok <- candidate_bound(child_result, request.max_rows) do
+      {:ok,
+       %CandidateState{rows: result_rows(child_result), complete?: true, protection: :locked}}
+    end
+  end
+
+  defp load_prepared_state(connection, %RecordRequest{} = request, opts),
+    do: load_record_state(connection, request, opts)
+
+  defp load_prepared_state(connection, %CandidateRequest{} = request, opts),
+    do: load_candidate_state(connection, request, opts)
+
+  defp load_prepared_state(_connection, request, _opts),
+    do:
+      {:error,
+       Error.new(:invalid_preparation, "unsupported prepared-state request",
+         details: %{actual: request}
+       )}
 
   defp preview_graph(%Graph{} = graph, opts) do
     graph.nodes
@@ -397,6 +495,97 @@ defmodule SelectoDBSQLite.Adapter do
 
   defp result_rows(%{rows: rows, columns: columns}) do
     Enum.map(rows, fn row -> Map.new(Enum.zip(columns, row)) end)
+  end
+
+  defp validate_prepared_write(%Command{} = command), do: Command.validate(command)
+  defp validate_prepared_write(%Batch{} = batch), do: Batch.validate(batch)
+  defp validate_prepared_write(%Graph{} = graph), do: Graph.validate(graph)
+
+  defp validate_prepared_write(other),
+    do: invalid_write_input(other) |> elem(1) |> then(&{:error, &1})
+
+  defp execute_prepared(connection, %Command{} = command, opts),
+    do: execute_write_command(connection, command, opts)
+
+  defp execute_prepared(connection, %Batch{} = batch, opts) do
+    Enum.reduce_while(batch.commands, {:ok, []}, fn command, {:ok, results} ->
+      case execute_write_command(connection, command, opts) do
+        {:ok, result} -> {:cont, {:ok, results ++ [result]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp execute_prepared(connection, %Graph{} = graph, opts),
+    do: execute_graph(connection, graph, opts)
+
+  defp valid_record_request(%RecordRequest{
+         operation: operation,
+         relation: relation,
+         predicate: predicate,
+         fields: fields
+       }) do
+    if operation in [:update, "update"] and not is_nil(predicate) and fields != [] and
+         valid_identifier?(relation) and Enum.all?(fields, &valid_identifier?/1),
+       do: :ok,
+       else: {:error, Error.new(:invalid_record_request, "record-state request is invalid")}
+  end
+
+  defp valid_candidate_request(%CandidateRequest{} = request) do
+    identifiers =
+      [
+        request.parent_command.relation,
+        request.parent_key,
+        request.child_relation,
+        request.child_key
+      ] ++
+        request.identity_fields ++ request.fields
+
+    if request.parent_command.operation in [:update, :delete] and
+         not is_nil(request.parent_command.predicate) and request.identity_fields != [] and
+         is_integer(request.max_rows) and request.max_rows in 1..1_000 and
+         Enum.all?(identifiers, &valid_identifier?/1),
+       do: :ok,
+       else: {:error, Error.new(:invalid_candidate_request, "candidate-state request is invalid")}
+  end
+
+  defp valid_identifier?(value) when is_atom(value), do: not is_nil(value)
+  defp valid_identifier?(value) when is_binary(value), do: String.trim(value) != ""
+  defp valid_identifier?(_value), do: false
+
+  defp exactly_one_parent(%{rows: [[id]]}), do: {:ok, id}
+
+  defp exactly_one_parent(%{rows: rows}) do
+    {:error,
+     Error.new(:cardinality_mismatch, "candidate parent matched an unexpected number of rows",
+       details: %{expected: 1, actual: length(rows)}
+     )}
+  end
+
+  defp exactly_one_record(%{rows: [_], columns: _} = result),
+    do: {:ok, result_rows(result) |> hd()}
+
+  defp exactly_one_record(%{rows: rows}) do
+    {:error,
+     Error.new(:cardinality_mismatch, "record candidate matched an unexpected number of rows",
+       details: %{expected: 1, actual: length(rows)}
+     )}
+  end
+
+  defp candidate_bound(%{rows: rows}, max_rows) when length(rows) <= max_rows, do: :ok
+
+  defp candidate_bound(%{rows: rows}, max_rows) do
+    {:error,
+     Error.new(:candidate_state_limit_exceeded, "candidate state exceeds its row bound",
+       details: %{max_rows: max_rows, observed_at_least: length(rows)}
+     )}
+  end
+
+  defp quote_relation(relation) do
+    relation
+    |> to_string()
+    |> String.split(".")
+    |> Enum.map_join(".", &quote_identifier/1)
   end
 
   defp invalid_write_input(write) do
