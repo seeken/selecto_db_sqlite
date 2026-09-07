@@ -334,7 +334,17 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
     duplicate = insert_command("duplicate", "Second")
     {:ok, batch} = Batch.new([first, duplicate])
 
-    assert {:error, %Error{type: :execution_failed}} = Write.execute(selecto, batch)
+    assert {:error,
+            %Error{
+              type: :native_constraint_violation,
+              details: %{
+                adapter: :sqlite,
+                write_stage: :execution_failed,
+                category: :unique_violation,
+                recoverable?: true
+              }
+            }} = Write.execute(selecto, batch)
+
     assert rows!(connection, "SELECT COUNT(*) FROM items") == [[0]]
   end
 

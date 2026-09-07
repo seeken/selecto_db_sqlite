@@ -603,8 +603,49 @@ defmodule SelectoDBSQLite.Adapter do
     end
   end
 
+  defp write_error(type, %Exqlite.Error{message: message} = reason) when is_binary(message) do
+    native_constraint_error(type, message, reason)
+  end
+
+  defp write_error(type, message) when is_binary(message) do
+    native_constraint_error(type, message, message)
+  end
+
   defp write_error(type, reason),
     do: Error.adapter_failure(type, :sqlite, reason, "SQLite write failed")
+
+  defp native_constraint_error(type, message, reason) do
+    case sqlite_constraint_category(message) do
+      nil ->
+        Error.adapter_failure(type, :sqlite, reason, "SQLite write failed")
+
+      category ->
+        Error.new(:native_constraint_violation, "SQLite constraint rejected write",
+          details: %{
+            adapter: :sqlite,
+            write_stage: type,
+            category: category,
+            column: sqlite_constraint_column(message),
+            recoverable?: true
+          }
+        )
+    end
+  end
+
+  defp sqlite_constraint_category("UNIQUE constraint failed:" <> _rest), do: :unique_violation
+
+  defp sqlite_constraint_category("FOREIGN KEY constraint failed" <> _rest),
+    do: :foreign_key_violation
+
+  defp sqlite_constraint_category("NOT NULL constraint failed:" <> _rest), do: :not_null_violation
+  defp sqlite_constraint_category(_message), do: nil
+
+  defp sqlite_constraint_column(message) do
+    case String.split(message, ": ", parts: 2) do
+      [_prefix, column] when column != "" -> column
+      _ -> nil
+    end
+  end
 
   defp begin_transaction(connection, 0) do
     case execute(connection, "BEGIN IMMEDIATE", [], []) do
