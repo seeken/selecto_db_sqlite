@@ -228,6 +228,82 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
              Adapter.execute_prepared_write(connection, prepare)
   end
 
+  test "file-backed prepared writers serialize through the immediate transaction" do
+    path =
+      Path.join(System.tmp_dir!(), "selecto-sqlite-lock-#{System.unique_integer([:positive])}.db")
+
+    parent = self()
+
+    on_exit(fn -> File.rm(path) end)
+
+    {:ok, first} = Adapter.connect(database: path, busy_timeout: 2_000)
+    {:ok, second} = Adapter.connect(database: path, busy_timeout: 2_000)
+
+    on_exit(fn -> Exqlite.Sqlite3.close(first) end)
+    on_exit(fn -> Exqlite.Sqlite3.close(second) end)
+
+    execute!(first, "CREATE TABLE locked_items (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    execute!(first, "INSERT INTO locked_items (id, name) VALUES (1, 'Before')")
+
+    update =
+      command!(%{
+        operation: :update,
+        relation: :locked_items,
+        assignments: [%{field: :name, value: {:literal, "First"}}],
+        predicate: {:eq, {:field, :id}, {:literal, 1}},
+        expected_cardinality: {:exactly, 1},
+        returning: :none
+      })
+
+    request = %RecordRequest{
+      operation: :update,
+      relation: :locked_items,
+      predicate: update.predicate,
+      fields: ["id", "name"]
+    }
+
+    first_task =
+      Task.async(fn ->
+        Adapter.execute_prepared_write(first, fn loader ->
+          assert {:ok, %RecordState{values: %{"id" => 1, "name" => "Before"}}} = loader.(request)
+          send(parent, :first_sqlite_writer_locked)
+
+          receive do
+            :release_first_sqlite_writer -> {:ok, update, %{}}
+          end
+        end)
+      end)
+
+    assert_receive :first_sqlite_writer_locked
+
+    second_task =
+      Task.async(fn ->
+        result =
+          Adapter.execute_write(
+            second,
+            command!(%{
+              operation: :insert,
+              relation: :locked_items,
+              assignments: [
+                %{field: :id, value: {:literal, 2}},
+                %{field: :name, value: {:literal, "Second"}}
+              ],
+              returning: :none
+            })
+          )
+
+        send(parent, {:second_sqlite_writer_result, result})
+        result
+      end)
+
+    refute_receive {:second_sqlite_writer_result, _}, 75
+    send(first_task.pid, :release_first_sqlite_writer)
+
+    assert {:ok, %Result{operation: :update}} = Task.await(first_task, 5_000)
+    assert {:ok, %Result{operation: :insert}} = Task.await(second_task, 5_000)
+    assert_receive {:second_sqlite_writer_result, {:ok, %Result{operation: :insert}}}
+  end
+
   test "rolls back a cardinality mismatch", %{connection: connection, selecto: selecto} do
     execute!(
       connection,
