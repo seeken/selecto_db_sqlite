@@ -77,7 +77,28 @@ defmodule SelectoDBSQLite.Adapter do
 
   @impl true
   def normalize_error(%Selecto.Error{} = error), do: error
+
+  def normalize_error(%Exqlite.Error{message: message}) when is_binary(message),
+    do: sanitized_read_error(message)
+
+  def normalize_error(reason) when is_binary(reason), do: sanitized_read_error(reason)
   def normalize_error(reason), do: Selecto.Error.from_reason(reason)
+
+  # SQLite messages name tables and columns and can quote SQL text. Only a
+  # stable category leaves the read path; writes classify constraints below.
+  defp sanitized_read_error(message) do
+    category =
+      cond do
+        category = sqlite_constraint_category(message) -> category
+        String.starts_with?(message, "CHECK constraint failed") -> :check_violation
+        true -> :database_error
+      end
+
+    Selecto.Error.query_error("SQLite rejected the statement", nil, [], %{
+      adapter: :sqlite,
+      category: category
+    })
+  end
 
   @impl true
   def connect(connection) when is_reference(connection), do: {:ok, connection}
@@ -109,9 +130,11 @@ defmodule SelectoDBSQLite.Adapter do
       connection = unwrap_connection(connection)
       timeout = Keyword.get(opts, :timeout, 5_000)
       params = normalize_params(params || [])
-      sqlite_query = query |> normalize_query() |> convert_parameters(params)
 
-      execute_prepared(connection, sqlite_query, params, timeout)
+      with {:ok, sqlite_query, params} <-
+             query |> normalize_query() |> convert_parameters(params) do
+        execute_prepared(connection, sqlite_query, params, timeout)
+      end
     end
   end
 
@@ -837,11 +860,100 @@ defmodule SelectoDBSQLite.Adapter do
     end
   end
 
-  defp convert_parameters(query, []), do: query
+  # Convert PostgreSQL-style $1, $2 to SQLite's numbered ?1, ?2, which bind by
+  # number, so reordered and repeated placeholders keep their values. Only
+  # placeholders outside quoted text and comments are rewritten, each by its
+  # full number.
+  @doc false
+  def convert_parameters(query, []), do: {:ok, query, []}
 
-  defp convert_parameters(query, params) do
-    params
-    |> Enum.with_index(1)
-    |> Enum.reduce(query, fn {_param, index}, acc -> String.replace(acc, "$#{index}", "?") end)
+  def convert_parameters(query, params) do
+    {sqlite_query, indexes, bare?} = scan_placeholders(query, [], [], false, nil)
+
+    cond do
+      indexes == [] ->
+        {:ok, query, params}
+
+      bare? ->
+        placeholder_error("numbered and positional placeholders cannot be mixed")
+
+      Enum.any?(indexes, &(&1 < 1 or &1 > length(params))) ->
+        placeholder_error("numbered placeholder has no matching parameter")
+
+      true ->
+        {:ok, sqlite_query, params}
+    end
   end
+
+  defp placeholder_error(message) do
+    {:error, Selecto.Error.validation_error(message, %{adapter: :sqlite, option: :params})}
+  end
+
+  defguardp identifier_byte?(byte)
+            when is_integer(byte) and
+                   (byte in ?a..?z or byte in ?A..?Z or byte in ?0..?9 or byte in [?_, ?$] or
+                      byte >= 0x80)
+
+  defp scan_placeholders(<<>>, acc, indexes, bare?, _previous),
+    do: {IO.iodata_to_binary(acc), Enum.reverse(indexes), bare?}
+
+  defp scan_placeholders(<<quote, rest::binary>>, acc, indexes, bare?, _previous)
+       when quote in [?', ?", ?`] do
+    {quoted, rest} = take_quoted(rest, quote, <<quote>>)
+    scan_placeholders(rest, [acc, quoted], indexes, bare?, quote)
+  end
+
+  defp scan_placeholders(<<"[", rest::binary>>, acc, indexes, bare?, _previous) do
+    {identifier, rest} = take_until(rest, "]", "[")
+    scan_placeholders(rest, [acc, identifier], indexes, bare?, ?])
+  end
+
+  defp scan_placeholders(<<"/*", rest::binary>>, acc, indexes, bare?, _previous) do
+    {comment, rest} = take_until(rest, "*/", "/*")
+    scan_placeholders(rest, [acc, comment], indexes, bare?, ?/)
+  end
+
+  defp scan_placeholders(<<"--", rest::binary>>, acc, indexes, bare?, _previous) do
+    {comment, rest} = take_until(rest, "\n", "--")
+    scan_placeholders(rest, [acc, comment], indexes, bare?, ?\n)
+  end
+
+  defp scan_placeholders(<<"$", digit, _::binary>> = text, acc, indexes, bare?, previous)
+       when digit in ?0..?9 and not identifier_byte?(previous) do
+    <<"$", rest::binary>> = text
+    {digits, rest} = take_digits(rest, "")
+    index = String.to_integer(digits)
+
+    scan_placeholders(rest, [acc, "?", Integer.to_string(index)], [index | indexes], bare?, ?0)
+  end
+
+  defp scan_placeholders(<<"?", rest::binary>>, acc, indexes, _bare?, _previous),
+    do: scan_placeholders(rest, [acc, "?"], indexes, true, ??)
+
+  defp scan_placeholders(<<byte, rest::binary>>, acc, indexes, bare?, _previous),
+    do: scan_placeholders(rest, [acc, byte], indexes, bare?, byte)
+
+  # SQLite has no backslash escapes: a quoted run ends at a closing quote that
+  # is not doubled.
+  defp take_quoted(<<>>, _quote, acc), do: {acc, ""}
+
+  defp take_quoted(<<quote, quote, rest::binary>>, quote, acc),
+    do: take_quoted(rest, quote, <<acc::binary, quote, quote>>)
+
+  defp take_quoted(<<quote, rest::binary>>, quote, acc), do: {<<acc::binary, quote>>, rest}
+
+  defp take_quoted(<<byte, rest::binary>>, quote, acc),
+    do: take_quoted(rest, quote, <<acc::binary, byte>>)
+
+  defp take_until(text, terminator, prefix) do
+    case :binary.split(text, terminator) do
+      [body, rest] -> {prefix <> body <> terminator, rest}
+      [body] -> {prefix <> body, ""}
+    end
+  end
+
+  defp take_digits(<<digit, rest::binary>>, acc) when digit in ?0..?9,
+    do: take_digits(rest, <<acc::binary, digit>>)
+
+  defp take_digits(rest, acc), do: {acc, rest}
 end

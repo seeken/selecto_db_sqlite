@@ -245,6 +245,11 @@ defmodule SelectoDBSQLite.WriteCompiler do
     end
   end
 
+  # A guard proves the referenced row exists. A guard that names
+  # `tenant_field` must also carry `tenant_value`; the referenced row must then
+  # belong to that tenant. Its columns are qualified by a subquery alias so a
+  # column missing from the referenced relation fails instead of resolving to
+  # the outer write target.
   defp compile_foreign_key_guards(metadata, assignments) do
     metadata
     |> Map.get(:foreign_key_guards, [])
@@ -255,12 +260,11 @@ defmodule SelectoDBSQLite.WriteCompiler do
       with %{field: field, relation: relation, target_field: target_field} <- guard,
            %{params: [value]} <-
              Enum.find(assignments, &(to_string(&1.field) == to_string(field))),
-           true <- valid_ref?(relation) and valid_ref?(target_field) do
-        text =
-          "EXISTS (SELECT 1 FROM #{quote_relation(relation)} WHERE " <>
-            "#{quote_identifier(target_field)} = ?)"
+           true <- valid_ref?(relation) and valid_ref?(target_field),
+           {:ok, tenant} <- foreign_key_guard_tenant(guard) do
+        {text, guard_params} = foreign_key_guard_text(relation, target_field, value, tenant)
 
-        {:cont, {:ok, [text | texts], params ++ [value], offset + 1}}
+        {:cont, {:ok, [text | texts], params ++ guard_params, offset + length(guard_params)}}
       else
         _ ->
           {:halt,
@@ -282,6 +286,32 @@ defmodule SelectoDBSQLite.WriteCompiler do
       error ->
         error
     end
+  end
+
+  defp foreign_key_guard_tenant(guard) do
+    case {Map.fetch(guard, :tenant_field), Map.get(guard, :tenant_value)} do
+      {:error, _value} ->
+        {:ok, nil}
+
+      {{:ok, tenant_field}, tenant_value} when not is_nil(tenant_value) ->
+        if valid_ref?(tenant_field), do: {:ok, {tenant_field, tenant_value}}, else: :error
+
+      _invalid ->
+        :error
+    end
+  end
+
+  defp foreign_key_guard_text(relation, target_field, value, nil) do
+    {"EXISTS (SELECT 1 FROM #{quote_relation(relation)} WHERE " <>
+       "#{quote_identifier(target_field)} = ?)", [value]}
+  end
+
+  defp foreign_key_guard_text(relation, target_field, value, {tenant_field, tenant}) do
+    alias_name = quote_identifier("selecto_fk_parent")
+
+    {"EXISTS (SELECT 1 FROM #{quote_relation(relation)} AS #{alias_name} " <>
+       "WHERE #{alias_name}.#{quote_identifier(target_field)} = ? " <>
+       "AND #{alias_name}.#{quote_identifier(tenant_field)} = ?)", [value, tenant]}
   end
 
   defp compile_predicate_list([], _separator, _opts, _offset),
