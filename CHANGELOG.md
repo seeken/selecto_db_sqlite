@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `execute_write/3` and `execute_prepared_write/3` refuse a write without the
+  `Selecto.Write.Authorization` the governed entry point (`SelectoUpdato`)
+  issued for exactly that command, batch or graph, with `:ungoverned_write` and
+  no row changed. The raw implementation moved to `execute_write_unsafe/3` and
+  `execute_prepared_write_unsafe/3`, for trusted tooling and adapter tests
+  only.
+
 - Reject releases containing native ObjectId fields, including unselected fields
   and counts, at capability preflight and direct document compilation.
 

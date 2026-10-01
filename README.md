@@ -63,6 +63,17 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
 - ⚠️ Write capabilities are probed from the connected SQLite runtime and fail
   closed when `RETURNING` is unavailable
 
+## Governed writes
+
+Applications write through `SelectoUpdato`, which validates every command,
+batch, and graph against the domain's `writes` contract and hands this adapter
+a single-use `Selecto.Write.Authorization` for exactly that payload.
+`execute_write/3` and `execute_prepared_write/3` refuse a write without one
+with `:ungoverned_write` before any statement runs, leaving every row
+unchanged. `execute_write_unsafe/3` and `execute_prepared_write_unsafe/3` skip
+that check; it exists for trusted tooling and this package's own tests, never
+for application code.
+
 ## Type Mappings
 
 | Elixir Type | SQLite Type | Storage |

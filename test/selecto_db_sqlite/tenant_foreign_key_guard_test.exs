@@ -68,19 +68,19 @@ defmodule SelectoDBSQLite.TenantForeignKeyGuardTest do
 
   test "a tenant-7 write cannot reference tenant 8's parent", %{connection: connection} do
     assert {:error, %Error{type: :cardinality_mismatch, details: %{actual: 0}}} =
-             Adapter.execute_write(connection, insert!(80), [])
+             Adapter.execute_write_unsafe(connection, insert!(80), [])
 
     assert {:error, %Error{type: :cardinality_mismatch, details: %{actual: 0}}} =
-             Adapter.execute_write(connection, update!(80), [])
+             Adapter.execute_write_unsafe(connection, update!(80), [])
 
     assert rows!(connection, "SELECT id, tenant_id, project_id, name FROM tasks ORDER BY id") ==
              [[1, 7, 70, "seed"]]
 
     assert {:ok, %Result{affected_rows: 1}} =
-             Adapter.execute_write(connection, insert!(70), [])
+             Adapter.execute_write_unsafe(connection, insert!(70), [])
 
     assert {:ok, %Result{affected_rows: 1}} =
-             Adapter.execute_write(connection, update!(70), [])
+             Adapter.execute_write_unsafe(connection, update!(70), [])
 
     assert rows!(connection, "SELECT tenant_id, project_id, name FROM tasks ORDER BY id") ==
              [[7, 70, "t"], [7, 70, "t"]]

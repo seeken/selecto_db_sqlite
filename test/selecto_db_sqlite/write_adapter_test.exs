@@ -60,7 +60,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
     assert report.capabilities.dialect == :sqlite
   end
 
-  test "executes governed flat writes and normalizes cardinality", %{selecto: selecto} do
+  test "executes flat writes and normalizes cardinality", %{selecto: selecto} do
     insert =
       command!(%{
         operation: :insert,
@@ -74,7 +74,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
       })
 
     assert {:ok, %Result{affected_rows: 1, rows: [%{"id" => id, "tenant_id" => 7}]}} =
-             Write.execute(selecto, insert, context: %{tenant_id: 7})
+             Write.execute_unsafe(selecto, insert, context: %{tenant_id: 7})
 
     update =
       command!(%{
@@ -91,7 +91,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
       })
 
     assert {:ok, %Result{affected_rows: 1, rows: [%{"name" => "Updated"}]}} =
-             Write.execute(selecto, update, context: %{tenant_id: 7})
+             Write.execute_unsafe(selecto, update, context: %{tenant_id: 7})
 
     upsert =
       command!(%{
@@ -107,7 +107,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
       })
 
     assert {:ok, %Result{affected_rows: 1, rows: [%{"id" => ^id, "name" => "Upserted"}]}} =
-             Write.execute(selecto, upsert)
+             Write.execute_unsafe(selecto, upsert)
 
     delete =
       command!(%{
@@ -123,7 +123,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
       })
 
     assert {:ok, %Result{affected_rows: 1, rows: [%{"id" => ^id}]}} =
-             Write.execute(selecto, delete)
+             Write.execute_unsafe(selecto, delete)
   end
 
   test "loads protected root state before executing a prepared update", %{connection: connection} do
@@ -166,7 +166,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
     end
 
     assert {:ok, %Result{operation: :update, affected_rows: 1}} =
-             Adapter.execute_prepared_write(connection, prepare)
+             Adapter.execute_prepared_write_unsafe(connection, prepare)
   end
 
   test "loads bounded protected child state before a prepared update", %{connection: connection} do
@@ -225,7 +225,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
     end
 
     assert {:ok, %Result{operation: :update, affected_rows: 1}} =
-             Adapter.execute_prepared_write(connection, prepare)
+             Adapter.execute_prepared_write_unsafe(connection, prepare)
   end
 
   test "file-backed prepared writers serialize through the immediate transaction" do
@@ -264,7 +264,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
 
     first_task =
       Task.async(fn ->
-        Adapter.execute_prepared_write(first, fn loader ->
+        Adapter.execute_prepared_write_unsafe(first, fn loader ->
           assert {:ok, %RecordState{values: %{"id" => 1, "name" => "Before"}}} = loader.(request)
           send(parent, :first_sqlite_writer_locked)
 
@@ -279,7 +279,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
     second_task =
       Task.async(fn ->
         result =
-          Adapter.execute_write(
+          Adapter.execute_write_unsafe(
             second,
             command!(%{
               operation: :insert,
@@ -321,7 +321,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
       })
 
     assert {:error, %Error{type: :cardinality_mismatch, details: %{actual: 2}}} =
-             Write.execute(selecto, command)
+             Write.execute_unsafe(selecto, command)
 
     assert rows!(connection, "SELECT name FROM items ORDER BY external_id") == [["A"], ["B"]]
   end
@@ -343,7 +343,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
                 category: :unique_violation,
                 recoverable?: true
               }
-            }} = Write.execute(selecto, batch)
+            }} = Write.execute_unsafe(selecto, batch)
 
     assert rows!(connection, "SELECT COUNT(*) FROM items") == [[0]]
   end
@@ -416,7 +416,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
                   %{client_identity: "child-1", identity: %{"id" => mapped_child_id}}
                 ]
               }
-            }} = Write.execute(selecto, graph)
+            }} = Write.execute_unsafe(selecto, graph)
 
     assert mapped_child_id == child_id
     assert rows!(connection, "SELECT item_id, name FROM children") == [[parent_id, "Child"]]
@@ -445,7 +445,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
       })
 
     assert {:error, %Error{type: :cardinality_mismatch, details: %{actual: 0}}} =
-             Write.execute(selecto, guarded)
+             Write.execute_unsafe(selecto, guarded)
 
     assert rows!(connection, "SELECT COUNT(*) FROM children") == [[0]]
   end
