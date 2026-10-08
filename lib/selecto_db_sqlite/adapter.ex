@@ -330,11 +330,21 @@ defmodule SelectoDBSQLite.Adapter do
   @impl Selecto.DB.WriteAdapter
   def preview_write(connection, write, opts \\ [])
 
-  def preview_write(_connection, %Command{} = command, opts),
-    do: WriteCompiler.preview(command, opts)
+  def preview_write(connection, %Command{} = command, opts) do
+    with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(connection, command, opts),
+         do: WriteCompiler.preview(command, opts)
+  end
 
-  def preview_write(_connection, %Batch{} = batch, opts), do: WriteCompiler.preview(batch, opts)
-  def preview_write(_connection, %Graph{} = graph, opts), do: preview_graph(graph, opts)
+  def preview_write(connection, %Batch{} = batch, opts) do
+    with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(connection, batch, opts),
+         do: WriteCompiler.preview(batch, opts)
+  end
+
+  def preview_write(connection, %Graph{} = graph, opts) do
+    with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(connection, graph, opts),
+         do: preview_graph(graph, opts)
+  end
+
   def preview_write(_connection, write, _opts), do: invalid_write_input(write)
 
   @impl Selecto.DB.WriteAdapter
@@ -358,7 +368,12 @@ defmodule SelectoDBSQLite.Adapter do
               with {:ok, write, context} <- prepare.(loader),
                    :ok <- validate_prepared_write(write),
                    :ok <- Capabilities.require(write_capabilities(tx), write),
-                   :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, write, opts),
+                   :ok <-
+                     SelectoDBSQLite.PreparedWriteSafety.validate(
+                       tx,
+                       write,
+                       Keyword.put(opts, :context, context)
+                     ),
                    :ok <- SelectoDBSQLite.GraphOwnership.validate(tx, write, opts) do
                 preview_write(tx, write, Keyword.put(opts, :context, context))
               end
@@ -405,7 +420,8 @@ defmodule SelectoDBSQLite.Adapter do
   def execute_write_unsafe(connection, %Command{} = command, opts) do
     with :ok <- Command.validate(command) do
       with_write_transaction(connection, opts, fn tx ->
-        execute_write_command(tx, command, opts)
+        with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, command, opts),
+             do: execute_write_command(tx, command, opts)
       end)
     end
   end
@@ -413,12 +429,14 @@ defmodule SelectoDBSQLite.Adapter do
   def execute_write_unsafe(connection, %Batch{} = batch, opts) do
     with :ok <- Batch.validate(batch) do
       with_write_transaction(connection, opts, fn tx ->
-        Enum.reduce_while(batch.commands, {:ok, []}, fn command, {:ok, results} ->
-          case execute_write_command(tx, command, opts) do
-            {:ok, result} -> {:cont, {:ok, results ++ [result]}}
-            {:error, _} = error -> {:halt, error}
-          end
-        end)
+        with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, batch, opts) do
+          Enum.reduce_while(batch.commands, {:ok, []}, fn command, {:ok, results} ->
+            case execute_write_command(tx, command, opts) do
+              {:ok, result} -> {:cont, {:ok, results ++ [result]}}
+              {:error, _} = error -> {:halt, error}
+            end
+          end)
+        end
       end)
     end
   end
@@ -473,7 +491,12 @@ defmodule SelectoDBSQLite.Adapter do
         with {:ok, write, context} <- prepare_fun.(loader),
              :ok <- validate_prepared_write(write),
              :ok <- Capabilities.require(write_capabilities(tx), write),
-             :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, write, opts) do
+             :ok <-
+               SelectoDBSQLite.PreparedWriteSafety.validate(
+                 tx,
+                 write,
+                 Keyword.put(opts, :context, context)
+               ) do
           execute_prepared(tx, write, Keyword.put(opts, :context, context))
         else
           {:error, %Error{} = error} -> {:error, error}
@@ -808,7 +831,8 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   defp execute_graph(connection, graph, opts) do
-    with :ok <- SelectoDBSQLite.GraphOwnership.validate(connection, graph, opts) do
+    with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(connection, graph, opts),
+         :ok <- SelectoDBSQLite.GraphOwnership.validate(connection, graph, opts) do
       execute_validated_graph(connection, graph, opts)
     end
   end

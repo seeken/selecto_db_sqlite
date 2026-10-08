@@ -40,9 +40,11 @@ defmodule SelectoDBSQLite.TenantForeignKeyGuardTest do
     %{connection: connection}
   end
 
-  test "a tenant guard binds the referenced row's tenant behind an alias" do
+  test "a tenant guard binds the referenced row's tenant behind an alias", %{
+    connection: connection
+  } do
     assert {:ok, %Preview{statements: [%{text: sql, params: [7, 80, "t", 80, 7]}]}} =
-             Adapter.preview_write(:unused, insert!(80), [])
+             Adapter.preview_write(connection, insert!(80), [])
 
     assert sql ==
              ~s|INSERT INTO "tasks" ("tenant_id", "project_id", "name") SELECT ?, ?, ? | <>
@@ -50,7 +52,7 @@ defmodule SelectoDBSQLite.TenantForeignKeyGuardTest do
                ~s|WHERE "selecto_fk_parent"."id" = ? AND "selecto_fk_parent"."tenant_id" = ?)|
 
     assert {:ok, %Preview{statements: [%{text: update_sql, params: [80, "t", 1, 7, 80, 7]}]}} =
-             Adapter.preview_write(:unused, update!(80), [])
+             Adapter.preview_write(connection, update!(80), [])
 
     assert update_sql =~
              ~s|AND EXISTS (SELECT 1 FROM "projects" AS "selecto_fk_parent" | <>

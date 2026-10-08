@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Apply incoming FK effect admission to connected previews and ordinary writes
+  as well as final prepared writes. Refuse automatic DELETE effects unless
+  actual scoped native reads prove no references. Preflight every batch/graph
+  command and delete-missing cleanup before the first mutation. Refuse TEMP
+  target shadows and sibling writes/triggers that invalidate absence evidence;
+  preserve nonautomatic constraints and caller transactions.
+
 - Check all final prepared update/upsert commands before business DML or
   prepared preview. Refuse incoming physical `ON UPDATE CASCADE`, `SET NULL`
   and `SET DEFAULT` effects when their referenced key is assigned, including

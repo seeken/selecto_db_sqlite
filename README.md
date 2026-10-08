@@ -448,7 +448,8 @@ load at most 1,000 children. Stored normalizers retain field grants and write-on
 guards; repeated selectors for one physical row refuse stale snapshots. Public
 prepared previews use the same native projection and preserve host transactions.
 
-Final prepared commands also check incoming main-schema foreign keys before
+Connected previews and ordinary/final prepared commands check incoming
+main-schema foreign keys before
 the first business statement. An update or upsert that assigns a referenced
 key refuses with `native_write_effects_not_evaluable` when SQLite would apply
 `ON UPDATE CASCADE`, `SET NULL`, or `SET DEFAULT` outside the approved commands.
@@ -458,9 +459,16 @@ primary-key targets and SQLite's ASCII identifier comparison. Unassigned keys
 and `NO ACTION`/`RESTRICT` keep their normal behavior. The protected catalog scan
 is bounded to 1,024 main tables and 4,096 foreign-key rows; unavailable or
 exhausted evidence refuses. This is a finite prepared-write admission check;
-it does not authorize arbitrary foreign-key cascades or establish all incoming
-delete effects. Public native controls are available in
-`scripts/sqlite_incoming_fk_regression.exs` with the selected Updato dependency.
+it does not authorize arbitrary foreign-key cascades. Deletes with automatic
+incoming actions require actual scoped reads proving there are no referencing
+children. The entire batch or graph, including delete-missing cleanup, is
+checked before its first mutation. An unmaterialized cleanup requires global
+absence; sibling writes to an incoming child table and main/TEMP triggers on
+plan targets refuse because they can invalidate that proof. TEMP target shadows
+also refuse. These are finite native admission boundaries; other trigger effects
+and attached-schema effects are not established by this check. Public native
+controls are available in `scripts/sqlite_incoming_fk_regression.exs` and
+`scripts/sqlite_delete_effects_regression.exs` with the selected Updato dependency.
 
 Native rule admission refuses trigger-bearing targets, any generated or hidden
 column, virtual/shadow tables, TEMP catalog shadows, custom collations, ambiguous
