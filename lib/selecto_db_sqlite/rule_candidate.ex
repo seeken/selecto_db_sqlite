@@ -12,6 +12,7 @@ defmodule SelectoDBSQLite.RuleCandidate do
          true <- is_map(request.values) and is_map(request.field_types),
          {:ok, table} <- table(request.relation),
          {:ok, schema} <- InsertAdmission.storage_schema(connection, table, opts),
+         {:ok, request} <- available_dependencies(request, schema),
          {:ok, fields, definitions, params} <- columns(request, schema) do
       project_row(connection, request, fields, definitions, params, opts)
     else
@@ -43,24 +44,77 @@ defmodule SelectoDBSQLite.RuleCandidate do
         kind = Map.fetch!(types, field)
 
         with %{hidden: 0} = column <- Map.get(schema, field),
-             true <- Regex.match?(@declaration, column.declared_type),
-             true <- compatible?(kind, column.declared_type),
-             true <-
-               not (request.operation == :insert and is_nil(value) and column.primary_key and
-                      column.declared_type == "INTEGER"),
-             {:ok, value} <- parameter(kind, value) do
-          definition =
-            Adapter.quote_identifier(field) <>
-              " " <>
-              column.declared_type <>
-              " COLLATE " <> Adapter.quote_identifier(column.collation)
+             true <- Regex.match?(@declaration, column.declared_type) do
+          if request.operation == :insert and is_nil(value) and column.rowid_alias do
+            # Availability already refused this value if any rule consumes it.
+            {:cont, {:ok, fields, definitions, params}}
+          else
+            with true <- compatible?(kind, column.declared_type),
+                 {:ok, value} <- parameter(kind, value) do
+              definition =
+                Adapter.quote_identifier(field) <>
+                  " " <>
+                  column.declared_type <>
+                  " COLLATE " <> Adapter.quote_identifier(column.collation)
 
-          {:cont,
-           {:ok, fields ++ [{field, kind}], definitions ++ [definition], params ++ [value]}}
+              {:cont,
+               {:ok, fields ++ [{field, kind}], definitions ++ [definition], params ++ [value]}}
+            else
+              _ -> {:halt, pending()}
+            end
+          end
         else
           _ -> {:halt, pending()}
         end
       end)
+    else
+      pending()
+    end
+  end
+
+  defp available_dependencies(request, schema) do
+    types = Map.new(request.field_types, fn {field, type} -> {to_string(field), type} end)
+    values = Map.new(request.values, fn {field, value} -> {to_string(field), value} end)
+    dependencies = Map.get(request.context, :selecto_rule_candidate_dependencies, :all)
+    dependencies = if dependencies == :all, do: Map.keys(types), else: dependencies
+
+    if is_list(dependencies) do
+      dependencies
+      |> Enum.reduce_while({:ok, values}, fn field, {:ok, current} ->
+        field = to_string(field)
+
+        case Map.get(schema, field) do
+          %{rowid_alias: true} when request.operation == :insert ->
+            if Map.get(current, field) == nil,
+              do: {:halt, pending()},
+              else: {:cont, {:ok, current}}
+
+          %{default_sql: default} ->
+            cond do
+              not Map.has_key?(types, field) ->
+                {:halt, pending()}
+
+              Map.has_key?(current, field) ->
+                {:cont, {:ok, current}}
+
+              request.operation == :insert and is_nil(default) ->
+                {:cont, {:ok, Map.put(current, field, nil)}}
+
+              true ->
+                {:halt, pending()}
+            end
+
+          _ ->
+            {:halt, pending()}
+        end
+      end)
+      |> case do
+        {:ok, values} ->
+          {:ok, %{request | values: values}}
+
+        error ->
+          error
+      end
     else
       pending()
     end

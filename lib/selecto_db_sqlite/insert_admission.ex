@@ -58,10 +58,10 @@ defmodule SelectoDBSQLite.InsertAdmission do
              opts
            ),
          true <- is_binary(ddl) and Regex.match?(~r/\ACREATE\s+TABLE\b/i, ddl),
-         {:ok, %{rows: [["table"]]}} <-
+         {:ok, %{rows: [["table", without_rowid]]}} <-
            Adapter.execute(
              connection,
-             "SELECT type FROM pragma_table_list WHERE schema = 'main' AND name = ? COLLATE NOCASE",
+             "SELECT type,wr FROM pragma_table_list WHERE schema = 'main' AND name = ? COLLATE NOCASE",
              [table],
              opts
            ),
@@ -80,16 +80,30 @@ defmodule SelectoDBSQLite.InsertAdmission do
              opts
            ),
          true <- rows != [] and Enum.all?(rows, &match?([_, _, _, _, _, _, 0], &1)),
+         {:ok, %{rows: primary_indexes}} <-
+           Adapter.execute(
+             connection,
+             "SELECT name FROM pragma_index_list(?, 'main') WHERE origin='pk'",
+             [table],
+             opts
+           ),
          {:ok, collations} <- column_collations(ddl),
          true <-
            Enum.all?(rows, fn [_, name | _] -> Map.has_key?(collations, ascii_fold(name)) end) do
+      primary_count = Enum.count(rows, fn [_, _, _, _, _, pk, _] -> pk > 0 end)
+
       {:ok,
-       Map.new(rows, fn [_cid, name, type, _notnull, _default, pk, hidden] ->
+       Map.new(rows, fn [_cid, name, type, notnull, default, pk, hidden] ->
          {name,
           %{
             declared_type: ascii_upcase(type),
             hidden: hidden,
             primary_key: pk > 0,
+            rowid_alias:
+              without_rowid == 0 and primary_indexes == [] and primary_count == 1 and
+                pk == 1 and ascii_upcase(type) == "INTEGER",
+            nullable: notnull == 0,
+            default_sql: default,
             collation: Map.fetch!(collations, ascii_fold(name))
           }}
        end)}
@@ -120,7 +134,7 @@ defmodule SelectoDBSQLite.InsertAdmission do
              {:ok, cast} <- storage_cast(Map.get(types, field), column),
              {:ok, value} <- Map.fetch(values, field),
              true <-
-               not (is_nil(value) and column.primary_key and column.declared_type == "INTEGER") do
+               not (is_nil(value) and column.rowid_alias) do
           projection =
             "CAST(? AS #{cast}) COLLATE #{Adapter.quote_identifier(column.collation)} AS #{Adapter.quote_identifier(field)}"
 

@@ -440,7 +440,7 @@ the named synthetic subset, not general document database portability.
 
 Apache 2.0
 
-Required canonical data rules use adapter-owned prepared transactions on SQLite
+Canonical storage-dependent data rules use adapter-owned prepared transactions on SQLite
 3.37 or newer. A rollback-only private TEMP row applies the physical column's
 actual affinity and built-in collation before candidate and transaction rules
 run. Protected updates load declared source fields and scoped collection deltas
@@ -508,3 +508,12 @@ Both protected snapshot loaders use the same proof before exposing children.
 Updato's collection provider preserves its existing generic
 `candidate_state_unavailable` diagnostic when physical evidence is unavailable;
 the individual record provider retains the adapter error.
+
+Prospective availability is checked independently of a rule's enforcement or
+condition. A consumed NULL or omitted true rowid alias remains unknown before
+INSERT, including an `INTEGER PRIMARY KEY DEFAULT` declaration. Catalog proof
+uses WITHOUT ROWID and physical primary-key index metadata to distinguish the
+column `INTEGER PRIMARY KEY DESC` exception and `INT PRIMARY KEY`, which store
+genuine NULL. Unconsumed generated identity is retained as intent without
+fabricating a projected value. Omitted ordinary nullable fields without defaults
+are known SQL NULL; unproved default dependencies remain pending.
