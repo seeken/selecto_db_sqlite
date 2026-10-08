@@ -56,7 +56,7 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
 - ✅ EXPLAIN QUERY PLAN
 - ✅ Portable insert, update, upsert, and delete
 - ✅ Atomic write batches
-- ✅ `RETURNING` and generated-key graphs on SQLite 3.35+
+- ✅ `RETURNING` on SQLite 3.35+ and admitted generated-key graphs on SQLite 3.37+
 
 ### Limitations
 - The documented portable join subset is INNER, LEFT, and CROSS. SQLite itself
@@ -453,3 +453,17 @@ column, virtual/shadow tables, TEMP catalog shadows, custom collations, ambiguou
 storage types, and unresolved generated values or required external evidence.
 Upsert and delete rules requiring a final candidate remain explicit refusals.
 All SQLite tests use in-memory databases.
+
+Generated-key graphs and protected child snapshots validate the physical parent
+and child ownership columns before hydration or graph DML. SQLite foreign keys
+compare with the parent's affinity and collation, while child predicates compare
+with the child's. This adapter admits those predicates only when both columns
+have the same SQLite affinity and built-in collation (`BINARY`, `NOCASE`, or
+`RTRIM`). Different type spellings with the same affinity, such as `TEXT` and
+`VARCHAR`, are supported. A mismatch, `ANY` storage, or an unavailable ordinary
+main-schema catalog refuses with `owned_key_comparison_not_evaluable`; it never
+uses a child's broader comparison to claim ownership of another parent's row.
+The check also covers empty delete-missing sets and prepared previews, inside
+the original connection's write transaction. Applications using mismatched
+physical ownership columns must align their schema before using this finite
+owned-graph port.

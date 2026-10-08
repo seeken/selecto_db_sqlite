@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Check generated graph edges and protected child snapshots against the physical
+  parent and child affinities and built-in collations before hydration or graph
+  DML. Refuse unprovable ownership, including mismatched collations, affinities
+  and `ANY`, rather than mutate or expose another parent's child.
+  Include empty owned-set cleanup and rollback-only prepared previews.
+  Governed generated-key graphs require SQLite 3.37+ for catalog admission.
+- Preserve SQLite's ASCII-only identifier/type folding when reading physical
+  column collations; parse unquoted Unicode and `$` identifiers and refuse a
+  catalog whose actual columns lack parsed comparison metadata.
+
 - Add bounded native grouped-prefix rollup lowering through the core's optional
   whole-query adapter callback. Preserve scope, joins, CTE markers, GROUPING masks,
   empty totals and numeric output types; apply final sorting and pagination once.

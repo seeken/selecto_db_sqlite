@@ -80,15 +80,17 @@ defmodule SelectoDBSQLite.InsertAdmission do
              opts
            ),
          true <- rows != [] and Enum.all?(rows, &match?([_, _, _, _, _, _, 0], &1)),
-         {:ok, collations} <- column_collations(ddl) do
+         {:ok, collations} <- column_collations(ddl),
+         true <-
+           Enum.all?(rows, fn [_, name | _] -> Map.has_key?(collations, ascii_fold(name)) end) do
       {:ok,
        Map.new(rows, fn [_cid, name, type, _notnull, _default, pk, hidden] ->
          {name,
           %{
-            declared_type: String.upcase(type),
+            declared_type: ascii_upcase(type),
             hidden: hidden,
             primary_key: pk > 0,
-            collation: Map.get(collations, String.downcase(name), "BINARY")
+            collation: Map.fetch!(collations, ascii_fold(name))
           }}
        end)}
     else
@@ -275,7 +277,7 @@ defmodule SelectoDBSQLite.InsertAdmission do
   defp column_collations(ddl) do
     tokens =
       Regex.scan(
-        ~r/--[^\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|[A-Za-z_][A-Za-z0-9_]*|\S/u,
+        ~r/--[^\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|[A-Za-z_\x{80}-\x{10FFFF}][A-Za-z0-9_$\x{80}-\x{10FFFF}]*|\S/u,
         ddl
       )
       |> List.flatten()
@@ -284,22 +286,21 @@ defmodule SelectoDBSQLite.InsertAdmission do
     with [_open | body] <- Enum.drop_while(tokens, &(&1 != "(")),
          {:ok, declarations} <- declarations(body, 0, [], []) do
       Enum.reduce_while(declarations, {:ok, %{}}, fn [name | rest], {:ok, result} ->
-        if String.upcase(name) in ["CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN"] do
+        if ascii_upcase(name) in ["CONSTRAINT", "PRIMARY", "UNIQUE", "CHECK", "FOREIGN"] do
           {:cont, {:ok, result}}
         else
           top = top_level(rest, 0, [])
 
-          case Enum.drop_while(top, &(String.upcase(&1) != "COLLATE")) do
+          case Enum.drop_while(top, &(ascii_upcase(&1) != "COLLATE")) do
             [] ->
-              {:cont, {:ok, Map.put(result, String.downcase(unquote_name(name)), "BINARY")}}
+              {:cont, {:ok, Map.put(result, ascii_fold(unquote_name(name)), "BINARY")}}
 
             [_collate, collation | tail] ->
-              collation = collation |> unquote_name() |> String.upcase()
+              collation = collation |> unquote_name() |> ascii_upcase()
 
               if collation in ["BINARY", "NOCASE", "RTRIM"] and
-                   not Enum.any?(tail, &(String.upcase(&1) == "COLLATE")),
-                 do:
-                   {:cont, {:ok, Map.put(result, String.downcase(unquote_name(name)), collation)}},
+                   not Enum.any?(tail, &(ascii_upcase(&1) == "COLLATE")),
+                 do: {:cont, {:ok, Map.put(result, ascii_fold(unquote_name(name)), collation)}},
                  else: {:halt, :error}
 
             _ ->
@@ -342,6 +343,20 @@ defmodule SelectoDBSQLite.InsertAdmission do
 
   defp unquote_name("[" <> rest), do: binary_part(rest, 0, byte_size(rest) - 1)
   defp unquote_name(name), do: name
+
+  # SQLite identifiers fold ASCII letters only. Unicode case pairs are distinct
+  # physical names and must never share a column's comparison metadata.
+  defp ascii_fold(value) do
+    for <<byte <- value>>,
+      into: <<>>,
+      do: <<if(byte in ?A..?Z, do: byte + 32, else: byte)>>
+  end
+
+  defp ascii_upcase(value) do
+    for <<byte <- value>>,
+      into: <<>>,
+      do: <<if(byte in ?a..?z, do: byte - 32, else: byte)>>
+  end
 
   defp denied(code),
     do:

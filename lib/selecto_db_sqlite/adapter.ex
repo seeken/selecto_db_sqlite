@@ -311,7 +311,9 @@ defmodule SelectoDBSQLite.Adapter do
       generated_keys: if(returning?, do: :returning, else: false),
       transactions: true,
       atomic_batch: true,
-      write_graph: returning?,
+      write_graph:
+        returning? and
+          SelectoDBSQLite.RuntimeCapabilities.version_at_least?(version, {3, 37, 0}),
       prepared_candidate_state: true,
       native_rule_candidates:
         SelectoDBSQLite.RuntimeCapabilities.version_at_least?(version, {3, 37, 0}),
@@ -355,7 +357,8 @@ defmodule SelectoDBSQLite.Adapter do
             result =
               with {:ok, write, context} <- prepare.(loader),
                    :ok <- validate_prepared_write(write),
-                   :ok <- Capabilities.require(write_capabilities(tx), write) do
+                   :ok <- Capabilities.require(write_capabilities(tx), write),
+                   :ok <- SelectoDBSQLite.GraphOwnership.validate(tx, write, opts) do
                 preview_write(tx, write, Keyword.put(opts, :context, context))
               end
 
@@ -501,7 +504,13 @@ defmodule SelectoDBSQLite.Adapter do
              "#{quote_identifier(field)} AS #{quote_identifier(alias_field)}"
            end),
          {:ok, ownership} <-
-           record_ownership_predicate(connection, request.ownership, request.context, opts),
+           record_ownership_predicate(
+             connection,
+             schema,
+             request.ownership,
+             request.context,
+             opts
+           ),
          {:ok, predicate} <-
            WriteCompiler.compile_predicate(request.predicate, context: request.context),
          fields = request.fields |> Enum.map(&to_string/1) |> Enum.uniq() |> Enum.sort(),
@@ -524,10 +533,17 @@ defmodule SelectoDBSQLite.Adapter do
   @doc false
   def load_candidate_state(connection, %CandidateRequest{} = request, opts \\ []) do
     with :ok <- valid_candidate_request(request),
-         {:ok, _} <-
+         {:ok, parent_schema} <-
            relation_storage_schema(connection, request.parent_command.relation, opts),
-         {:ok, _} <-
+         {:ok, child_schema} <-
            relation_storage_schema(connection, request.child_relation, opts),
+         :ok <-
+           SelectoDBSQLite.GraphOwnership.require_comparison(
+             parent_schema,
+             request.parent_key,
+             child_schema,
+             request.child_key
+           ),
          {:ok, child_scope} <- compile_candidate_scope(request.scope_predicate, request.context),
          {:ok, predicate} <-
            WriteCompiler.compile_predicate(request.parent_command.predicate,
@@ -561,18 +577,26 @@ defmodule SelectoDBSQLite.Adapter do
     end
   end
 
-  defp record_ownership_predicate(_connection, nil, _context, _opts),
+  defp record_ownership_predicate(_connection, _child_schema, nil, _context, _opts),
     do: {:ok, %{text: "", params: []}}
 
   defp record_ownership_predicate(
          connection,
+         child_schema,
          %{parent_command: %Command{} = parent, parent_key: parent_key, child_key: child_key},
          context,
          opts
        ) do
     with true <- parent.operation in [:update, :delete],
-         {:ok, _} <-
+         {:ok, parent_schema} <-
            relation_storage_schema(connection, parent.relation, opts),
+         :ok <-
+           SelectoDBSQLite.GraphOwnership.require_comparison(
+             parent_schema,
+             parent_key,
+             child_schema,
+             child_key
+           ),
          {:ok, predicate} <- WriteCompiler.compile_predicate(parent.predicate, context: context),
          query =
            "SELECT #{quote_identifier(parent_key)} FROM #{quote_relation(parent.relation)} WHERE #{predicate.text}",
@@ -580,6 +604,9 @@ defmodule SelectoDBSQLite.Adapter do
          {:ok, parent_id} <- exactly_one_parent(result) do
       {:ok, %{text: " AND #{quote_identifier(child_key)} = ?", params: [parent_id]}}
     else
+      {:error, %Error{}} = error ->
+        error
+
       _ ->
         {:error,
          Error.new(:validation, "owned candidate anchor is unavailable",
@@ -588,7 +615,7 @@ defmodule SelectoDBSQLite.Adapter do
     end
   end
 
-  defp record_ownership_predicate(_connection, _ownership, _context, _opts),
+  defp record_ownership_predicate(_connection, _child_schema, _ownership, _context, _opts),
     do:
       {:error,
        Error.new(:validation, "owned candidate anchor is invalid",
@@ -755,6 +782,12 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   defp execute_graph(connection, graph, opts) do
+    with :ok <- SelectoDBSQLite.GraphOwnership.validate(connection, graph, opts) do
+      execute_validated_graph(connection, graph, opts)
+    end
+  end
+
+  defp execute_validated_graph(connection, graph, opts) do
     graph.nodes
     |> Enum.reduce_while({:ok, %{}, 0, []}, fn node, {:ok, results, affected_rows, strategies} ->
       with {:ok, materialized} <- Materializer.materialize_node(node, results),
