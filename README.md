@@ -147,6 +147,18 @@ with AddressSanitizer and UndefinedBehaviorSanitizer using an in-memory SQLite
 database. `SQLITE_HEADERS` and `SQLITE_LIB_DIR` may select the test consumer's
 headers and a SQLite library with extension loading enabled.
 
+Windows builds include `Makefile.win` for `elixir_make`'s NMake selection and
+produce `selecto_json_contains.dll`, with an explicit undecorated SQLite entry
+point export. Run Mix from a Visual Studio developer command prompt with a
+C11-capable MSVC toolchain (Visual Studio 2019 16.8 or newer). The API pointer
+uses MSVC interlocked intrinsics instead of experimental C11 atomics. GNU Make
+with a compatible MinGW compiler is also supported by the Unix makefile's
+`Windows_NT` branch. Windows x64/x86 DLLs have been cross-built and their
+initializer exports inspected; the MSVC branch has passed Windows-target syntax
+checks for x64, ARM64 and x86. Native execution has currently been verified on
+Darwin; actual MSVC/NMake execution and Windows runtime tests await a Windows CI
+host.
+
 Array values use JSON storage. Constructors, one-dimensional length/cardinality,
 typed contains/overlap/contained/equality predicates, and native `json_each`
 rowsets are supported. JSON array aggregates retain nulls and support DISTINCT

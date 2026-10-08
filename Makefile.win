@@ -1,0 +1,32 @@
+# NMake / MSVC build. Run Mix from a Visual Studio developer command prompt.
+!IFNDEF MIX_APP_PATH
+MIX_APP_PATH = _build\dev\lib\selecto_db_sqlite
+!ENDIF
+!IFNDEF MIX_DEPS_PATH
+MIX_DEPS_PATH = deps
+!ENDIF
+!IFNDEF SQLITE_HEADERS
+SQLITE_HEADERS = $(MIX_DEPS_PATH)\exqlite\c_src
+!ENDIF
+!IFNDEF CC
+CC = cl
+!ENDIF
+
+APP_PATH = $(MIX_APP_PATH:/=\)
+HEADERS = $(SQLITE_HEADERS:/=\)
+LIBRARY = $(APP_PATH)\priv\selecto_json_contains.dll
+OBJECT = $(APP_PATH)\priv\selecto_json_contains.obj
+IMPORT_LIBRARY = $(APP_PATH)\priv\selecto_json_contains.lib
+SELECTO_JSON_FLAGS = /nologo /O2 /std:c11 /TC /MD /W4 /WX /DSELECTO_JSON_DEF_EXPORT=1 $(CFLAGS)
+
+all: "$(LIBRARY)"
+
+"$(LIBRARY)": c_src\selecto_json.c c_src\selecto_json.def "$(HEADERS)\sqlite3ext.h" "$(HEADERS)\sqlite3.h" Makefile.win
+	if not exist "$(APP_PATH)\priv" mkdir "$(APP_PATH)\priv"
+	$(CC) $(SELECTO_JSON_FLAGS) /I"$(HEADERS)" /LD /Fo"$(OBJECT)" /Fe"$(LIBRARY)" c_src\selecto_json.c /link /DEF:c_src\selecto_json.def /IMPLIB:"$(IMPORT_LIBRARY)" $(LDFLAGS)
+
+clean:
+	if exist "$(LIBRARY)" del /f /q "$(LIBRARY)"
+	if exist "$(OBJECT)" del /f /q "$(OBJECT)"
+	if exist "$(IMPORT_LIBRARY)" del /f /q "$(IMPORT_LIBRARY)"
+	if exist "$(APP_PATH)\priv\selecto_json_contains.exp" del /f /q "$(APP_PATH)\priv\selecto_json_contains.exp"

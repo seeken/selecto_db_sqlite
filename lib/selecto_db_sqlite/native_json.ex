@@ -26,7 +26,13 @@ defmodule SelectoDBSQLite.NativeJson do
   end
 
   defp install_extension(connection) do
-    library = Path.join(to_string(:code.priv_dir(:selecto_db_sqlite)), "selecto_json_contains.so")
+    filename =
+      case :os.type() do
+        {:win32, _} -> "selecto_json_contains.dll"
+        _ -> "selecto_json_contains.so"
+      end
+
+    library = Path.join(to_string(:code.priv_dir(:selecto_db_sqlite)), filename)
 
     with true <- File.regular?(library),
          :ok <- Exqlite.Sqlite3.enable_load_extension(connection, true) do

@@ -3,14 +3,30 @@
  * tokens; no SQLite REAL or host floating-point conversion occurs.
  */
 #include "sqlite3ext.h"
-#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* Several Exqlite connections can install this library concurrently. Keep
  * SQLite's shared API pointer atomic across initialization and callback use. */
+#if defined(_WIN32) && defined(_MSC_VER)
+#include <intrin.h>
+static void *volatile selecto_sqlite_api;
+static const sqlite3_api_routines *read_api(void) {
+  return (const sqlite3_api_routines *)_InterlockedCompareExchangePointer(
+      &selecto_sqlite_api, NULL, NULL);
+}
+#define sqlite3_api read_api()
+static void initialize_api(const sqlite3_api_routines *api) {
+  (void)_InterlockedExchangePointer(&selecto_sqlite_api, (void *)api);
+}
+#else
+#include <stdatomic.h>
 static _Atomic(const sqlite3_api_routines *) sqlite3_api;
+static void initialize_api(const sqlite3_api_routines *api) {
+  SQLITE_EXTENSION_INIT2(api);
+}
+#endif
 
 #define MAX_INPUT ((size_t)1048576)
 #define MAX_NODES ((size_t)32768)
@@ -404,13 +420,15 @@ static void json_contains(sqlite3_context *context, int argc, sqlite3_value **ar
 }
 
 #if defined(_WIN32)
+#if !defined(SELECTO_JSON_DEF_EXPORT)
 __declspec(dllexport)
+#endif
 #else
 __attribute__((visibility("default")))
 #endif
 int sqlite3_selectojson_init(sqlite3 *database, char **error, const sqlite3_api_routines *api) {
   (void)error;
-  SQLITE_EXTENSION_INIT2(api);
+  initialize_api(api);
   return sqlite3_create_function_v2(database, "selecto_json_contains_exact_v1", 2,
       SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL, json_contains, NULL, NULL, NULL);
 }

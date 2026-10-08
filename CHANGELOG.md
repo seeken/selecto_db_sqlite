@@ -8,6 +8,7 @@
   shapes; bound parsing and comparison work with explicit resource refusals.
   Package native source and build it with `elixir_make`, install it on newly
   opened or adopted Exqlite connections, and disable loading after setup.
+  Include NMake/MSVC and GNU/MinGW DLL builds with explicit initializer exports.
 - Correct ordinary JSON object/scalar-array predicates with type-aware null,
   boolean, numeric and text comparisons, object/array guards, empty-object and
   empty-any/all semantics, and recursive object/array containment with bound keys.

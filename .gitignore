@@ -7,6 +7,10 @@
 # The directory Mix downloads your dependencies sources to.
 /deps/
 /priv/*.so
+/priv/*.dll
+/priv/*.obj
+/priv/*.lib
+/priv/*.exp
 
 # Where third-party dependencies like ExDoc output generated docs.
 /doc/

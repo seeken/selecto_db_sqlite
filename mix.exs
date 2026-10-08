@@ -65,7 +65,16 @@ defmodule Selecto.DB.SQLite.MixProject do
     [
       name: "selecto_db_sqlite",
       licenses: ["Apache-2.0"],
-      files: ["lib", "c_src", "Makefile", "mix.exs", "README.md", "LICENSE", "CHANGELOG.md"],
+      files: [
+        "lib",
+        "c_src",
+        "Makefile",
+        "Makefile.win",
+        "mix.exs",
+        "README.md",
+        "LICENSE",
+        "CHANGELOG.md"
+      ],
       links: %{
         "GitHub" => @source_url,
         "Selecto" => "https://github.com/selecto/selecto"
