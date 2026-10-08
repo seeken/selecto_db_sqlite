@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Check all final prepared update/upsert commands before business DML or
+  prepared preview. Refuse incoming physical `ON UPDATE CASCADE`, `SET NULL`
+  and `SET DEFAULT` effects when their referenced key is assigned, including
+  assignments added by stored normalizers. Preserve unassigned keys, ordinary
+  `NO ACTION`/`RESTRICT` semantics, actual upsert update-field lists and caller
+  transactions. Catalog scans are bounded and unavailable evidence refuses.
+
 - Require a proven physical unique parent comparator and agreement of every
   relevant child foreign-key group before graph bindings, empty/nonempty sync,
   collection hydration and individual child snapshots. Preserve safe no-FK

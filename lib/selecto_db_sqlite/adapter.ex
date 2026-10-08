@@ -358,6 +358,7 @@ defmodule SelectoDBSQLite.Adapter do
               with {:ok, write, context} <- prepare.(loader),
                    :ok <- validate_prepared_write(write),
                    :ok <- Capabilities.require(write_capabilities(tx), write),
+                   :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, write, opts),
                    :ok <- SelectoDBSQLite.GraphOwnership.validate(tx, write, opts) do
                 preview_write(tx, write, Keyword.put(opts, :context, context))
               end
@@ -471,7 +472,8 @@ defmodule SelectoDBSQLite.Adapter do
       try do
         with {:ok, write, context} <- prepare_fun.(loader),
              :ok <- validate_prepared_write(write),
-             :ok <- Capabilities.require(write_capabilities(tx), write) do
+             :ok <- Capabilities.require(write_capabilities(tx), write),
+             :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, write, opts) do
           execute_prepared(tx, write, Keyword.put(opts, :context, context))
         else
           {:error, %Error{} = error} -> {:error, error}

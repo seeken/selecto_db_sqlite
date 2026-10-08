@@ -448,6 +448,20 @@ load at most 1,000 children. Stored normalizers retain field grants and write-on
 guards; repeated selectors for one physical row refuse stale snapshots. Public
 prepared previews use the same native projection and preserve host transactions.
 
+Final prepared commands also check incoming main-schema foreign keys before
+the first business statement. An update or upsert that assigns a referenced
+key refuses with `native_write_effects_not_evaluable` when SQLite would apply
+`ON UPDATE CASCADE`, `SET NULL`, or `SET DEFAULT` outside the approved commands.
+This includes a normalizer changing a field that was not originally submitted.
+The check uses the actual upsert conflict-update field list, physical implicit
+primary-key targets and SQLite's ASCII identifier comparison. Unassigned keys
+and `NO ACTION`/`RESTRICT` keep their normal behavior. The protected catalog scan
+is bounded to 1,024 main tables and 4,096 foreign-key rows; unavailable or
+exhausted evidence refuses. This is a finite prepared-write admission check;
+it does not authorize arbitrary foreign-key cascades or establish all incoming
+delete effects. Public native controls are available in
+`scripts/sqlite_incoming_fk_regression.exs` with the selected Updato dependency.
+
 Native rule admission refuses trigger-bearing targets, any generated or hidden
 column, virtual/shadow tables, TEMP catalog shadows, custom collations, ambiguous
 storage types, and unresolved generated values or required external evidence.
