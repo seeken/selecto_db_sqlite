@@ -344,9 +344,18 @@ defmodule SelectoDBSQLite.Adapter do
            :ok <- Capabilities.require(write_capabilities(tx), write) do
         execute_prepared(tx, write, Keyword.put(opts, :context, context))
       else
-        {:error, %Error{} = error} -> {:error, error}
-        {:error, reason} -> {:error, write_error(:candidate_preparation_failed, reason)}
-        other -> {:error, write_error(:candidate_preparation_failed, other)}
+        {:error, %Error{} = error} ->
+          {:error, error}
+
+        {:error, %{type: type, message: message, details: details}}
+        when is_atom(type) and is_binary(message) and is_map(details) ->
+          {:error, Error.new(type, message, details: details)}
+
+        {:error, reason} ->
+          {:error, write_error(:candidate_preparation_failed, reason)}
+
+        other ->
+          {:error, write_error(:candidate_preparation_failed, other)}
       end
     end)
   end

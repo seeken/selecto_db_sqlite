@@ -60,6 +60,50 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
     assert report.capabilities.dialect == :sqlite
   end
 
+  test "prepared policy refusals retain their native type and details", %{connection: connection} do
+    execute!(
+      connection,
+      "INSERT INTO items (tenant_id, external_id, name) VALUES (7, 'own', 'Own'), (8, 'foreign', 'Foreign')"
+    )
+
+    snapshot = fn ->
+      {:ok, %{rows: rows}} =
+        Adapter.execute(
+          connection,
+          "SELECT id, tenant_id, external_id, name FROM items ORDER BY id",
+          [],
+          []
+        )
+
+      rows
+    end
+
+    before = snapshot.()
+    details = %{field: :tenant_id, expected: 7, actual: 8}
+
+    assert {:error,
+            %Error{type: :tenant_mismatch, message: "child tenant differs", details: ^details}} =
+             Adapter.execute_prepared_write(
+               connection,
+               fn _loader ->
+                 {:error,
+                  %{type: :tenant_mismatch, message: "child tenant differs", details: details}}
+               end,
+               []
+             )
+
+    assert snapshot.() == before
+
+    assert {:error, %Error{type: :candidate_preparation_failed}} =
+             Adapter.execute_prepared_write(
+               connection,
+               fn _loader -> {:error, :driver_failure} end,
+               []
+             )
+
+    assert snapshot.() == before
+  end
+
   test "executes flat writes and normalizes cardinality", %{selecto: selecto} do
     insert =
       command!(%{
