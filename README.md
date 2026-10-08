@@ -42,7 +42,10 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
 - ✅ Joins (INNER, LEFT, CROSS)
 - ✅ CTEs and recursive CTEs
 - ✅ Window functions (basic windows: SQLite 3.25+; GROUPS/newer RANGE frames: 3.28+)
-- ✅ JSON operations (JSON1 extension)
+- ✅ Typed recursive JSON containment, JSON extraction, and JSON rowsets (JSON support required)
+- ✅ Computed casts, JSON text values, fractional decimal division, and portable buckets
+- ✅ Calendar formats, date parts and truncation, ISO weeks, and UTC epoch conversion
+- ✅ JSON-backed arrays and ordered/distinct aggregate collections
 - ✅ Full-text search (FTS5 extension)
 - ✅ Savepoints, including caller-owned transactions
 - ✅ Incremental streaming with statement cleanup and deadlines
@@ -69,9 +72,12 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
 
 The available JSON, FTS5, math, and newer SQL features depend on the connected
 SQLite library's version and build. Coarse `supports?/1` flags describe adapter
-ports; they do not install missing engine extensions. Use a current SQLite
-build for the complete adapter feature set. `write_capabilities/1` reports the
-connected version and gates `RETURNING` at 3.35.0.
+ports; they do not install missing engine extensions. `connection_capabilities/1`
+and `supports?(conn, feature)` report the connected version, compile options, and
+JSON/FTS5/math probes. Connected renderers gate JSON, FTS5, aggregate ordering
+(3.44+), and clipped month/year cutoffs (3.46+). `write_capabilities/1` also gates
+UPSERT (3.24+) and RETURNING (3.35+). Use a current SQLite build for the complete
+adapter feature set.
 
 ## Governed writes
 
@@ -104,10 +110,28 @@ for application code.
 NUMERIC affinity can convert decimal text to a floating-point or integer SQLite
 value. This adapter does not promise fixed-scale or arbitrary-precision decimal
 storage. Ordinary JSON containment distinguishes booleans from numbers, explicit
-JSON null from a missing member, and text from numeric values. It accepts nested
-objects and scalar members; nested array/object array-membership requests fail
+JSON null from a missing member, and text from numeric values. General containment
+accepts recursively nested objects and arrays, with bound object keys including
+punctuation and quoted names (maximum nesting depth 32). Scalar-array any/all
+membership accepts scalar needles; nested needles in those finite operations fail
 validation. An empty object matches objects, an empty array-any matches nothing,
-and an empty array-all matches only valid arrays.
+and an empty array-all matches only valid arrays. SQL NULL propagates through
+JSON predicates.
+
+Array values use JSON storage. Constructors, one-dimensional length/cardinality,
+typed contains/overlap/contained/equality predicates, and native `json_each`
+rowsets are supported. JSON array aggregates retain nulls and support DISTINCT
+and ordering. String aggregates support bound separators and ordering; DISTINCT
+requires SQLite's comma separator. Multidimensional array-specific operations
+and correlated LATERAL subqueries remain unsupported.
+
+Datetime operations accept UTC storage and output zones, including Unix seconds
+and milliseconds. ISO weeks use the ISO year at January/December boundaries,
+and week truncation starts on Monday. Unknown formats, symbolic age intervals,
+microsecond extraction, and IANA timezone conversion fail validation. SQLite
+keeps millisecond timestamp precision; decimal division uses floating point.
+Numeric buckets floor negative values without requiring optional math functions.
+Text normalization respects the configured article list and case policy.
 
 ## SQLite Pragmas
 
@@ -200,6 +224,21 @@ closing the connection. Its deadline includes consumer time between rows.
 Introspection defaults to schema `"main"`; pass `schema: "temp"` or an attached
 database name when needed. Foreign-key and index metadata retain composite-key
 positions and SQLite actions.
+
+Public engine reads use `execute_query/4`, which preserves the caller's
+`PRAGMA query_only` state. Streams hold this read-only guard while enumerated;
+concurrent governed reads on one connection wait for the owner to finish.
+Completion, errors, early halt, and consumer termination restore saved state.
+Consume or halt a stream before closing its connection. Adapter `execute/4` and
+`execute_raw/3` remain trusted administrative ports for fixture setup and tooling.
+External native-driver operations can bypass this ownership protocol.
+
+Captured-query inserts prove the guard against canonical candidate values using
+the table's actual affinity and BINARY/NOCASE/RTRIM collation before DML. Guarded
+fields must be supplied explicitly. Unsupported types, generated/default-dependent
+guard fields, triggers, views/virtual tables, and temp-table shadows fail with
+`query_rule_not_evaluable`; false/NULL guards return `query_rule_violation`.
+No row is changed on refusal. Fixed-scale insert precision remains unsupported.
 
 All SQLite tests use `:memory:` databases, or a named
 `file:name?mode=memory&cache=shared` URI when separate handles must share state.

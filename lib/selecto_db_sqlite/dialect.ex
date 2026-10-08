@@ -9,6 +9,10 @@ defmodule SelectoDBSQLite.Dialect do
   alias Selecto.Dialect.Bucket.Expression, as: BucketExpression
   alias Selecto.Dialect.Predicate.Comparison
 
+  @impl true
+  def render_computed_value(fragment, selecto),
+    do: SelectoDBSQLite.ComputedValues.render(fragment, selecto)
+
   alias Selecto.Dialect.Json.{
     ArrayContains,
     ArrayContainsAll,
@@ -19,35 +23,16 @@ defmodule SelectoDBSQLite.Dialect do
   }
 
   @impl true
-  def render_datetime_operation(%DateTimeOperation{operation: :format} = operation, _selecto) do
-    if temporal_conversion_requested?(operation.options) do
-      unsupported_datetime(operation)
-    else
-      {:ok,
-       SelectoDBSQLite.Adapter.format_datetime(
-         operation.expression,
-         Map.fetch!(operation.options, :format)
-       )}
-    end
-  end
-
-  def render_datetime_operation(%DateTimeOperation{} = operation, _selecto),
-    do: unsupported_datetime(operation)
+  def render_datetime_operation(%DateTimeOperation{} = operation, selecto),
+    do: SelectoDBSQLite.Calendar.render(operation, selecto)
 
   @impl true
-  def render_bucket(%BucketExpression{} = bucket, _selecto) do
-    case bucket_sql(bucket) do
-      {:ok, sql} ->
-        {:ok, sql}
+  def render_bucket(%BucketExpression{} = bucket, selecto),
+    do: SelectoDBSQLite.Buckets.render(bucket, selecto)
 
-      {:error, reason} ->
-        {:error,
-         Selecto.Error.validation_error("Invalid SQLite bucket expression", %{
-           unsupported_feature: :bucket_expression,
-           reason: reason
-         })}
-    end
-  end
+  @impl true
+  def render_text_normalization(normalization, _selecto),
+    do: SelectoDBSQLite.Buckets.normalize(normalization)
 
   @impl true
   def render_comparison(%Comparison{} = comparison, _selecto) do
@@ -55,297 +40,66 @@ defmodule SelectoDBSQLite.Dialect do
     {:ok, ["LOWER(", comparison.left, ") ", operator, " LOWER(", comparison.right, ")"]}
   end
 
-  defp bucket_sql(%BucketExpression{kind: :numeric_ranges} = bucket),
-    do: range_case_sql(bucket.expression, bucket.ranges)
+  @impl true
+  def render_json_extraction(%Extraction{} = fragment, selecto) do
+    with :ok <- SelectoDBSQLite.RuntimeCapabilities.require_feature(selecto, :json) do
+      value = "selecto_extract.value"
+      path = json_path(fragment.path)
+      extract = ["json_extract(", value, ", '", path, "')"]
 
-  defp bucket_sql(%BucketExpression{kind: :numeric_increment, increment: increment} = bucket)
-       when is_integer(increment) and increment > 0,
-       do: {:ok, increment_bucket_sql(bucket.expression, increment)}
-
-  defp bucket_sql(%BucketExpression{kind: :year_increment, increment: increment} = bucket)
-       when is_integer(increment) and increment > 0,
-       do:
-         {:ok,
-          increment_bucket_sql(
-            ["CAST(strftime('%Y', ", bucket.expression, ") AS INTEGER)"],
-            increment
-          )}
-
-  defp bucket_sql(%BucketExpression{kind: :year_ranges} = bucket),
-    do:
-      range_case_sql(
-        ["CAST(strftime('%Y', ", bucket.expression, ") AS INTEGER)"],
-        bucket.ranges
-      )
-
-  defp bucket_sql(%BucketExpression{kind: :elapsed_days_ranges} = bucket),
-    do:
-      range_case_sql(
-        ["CAST(julianday('now') - julianday(", bucket.expression, ") AS INTEGER)"],
-        bucket.ranges
-      )
-
-  defp bucket_sql(%BucketExpression{kind: :date_relative_ranges} = bucket),
-    do: date_range_case_sql(["DATE(", bucket.expression, ")"], bucket.ranges)
-
-  defp bucket_sql(%BucketExpression{kind: :text_prefix} = bucket)
-       when is_integer(bucket.prefix_length) and bucket.prefix_length > 0 do
-    normalized = normalized_text(bucket)
-
-    {:ok,
-     [
-       "CASE WHEN ",
-       normalized,
-       " IS NULL OR ",
-       normalized,
-       " = '' THEN 'Other' ELSE UPPER(SUBSTR(",
-       normalized,
-       ", 1, ",
-       Integer.to_string(bucket.prefix_length),
-       ")) END"
-     ]}
-  end
-
-  defp bucket_sql(_bucket), do: {:error, :unsupported_bucket_shape}
-
-  defp increment_bucket_sql(expression, increment_value) do
-    increment = Integer.to_string(increment_value)
-
-    bucket_start = [
-      "CAST(FLOOR(CAST(",
-      expression,
-      " AS REAL) / ",
-      increment,
-      ") AS INTEGER) * ",
-      increment
-    ]
-
-    [
-      "CASE WHEN ",
-      expression,
-      " IS NULL THEN 'Other' ELSE CAST((",
-      bucket_start,
-      ") AS TEXT) || '-' || CAST(((",
-      bucket_start,
-      ") + ",
-      Integer.to_string(increment_value - 1),
-      ") AS TEXT) END"
-    ]
-  end
-
-  defp range_case_sql(expression, ranges) when is_list(ranges) and ranges != [] do
-    ranges
-    |> Enum.map(&range_clause(expression, &1))
-    |> collect_case_clauses()
-  end
-
-  defp range_case_sql(_expression, _ranges), do: {:error, :empty_ranges}
-
-  defp range_clause(expression, {minimum, maximum, label})
-       when is_integer(minimum) and is_integer(maximum) and minimum == maximum,
-       do:
-         {:ok,
+      result =
+        if fragment.as_text do
           [
-            "WHEN ",
-            expression,
-            " = ",
-            Integer.to_string(minimum),
-            " THEN '",
-            escape_literal(label),
-            "'"
-          ]}
+            "CASE json_type(",
+            value,
+            ", '",
+            path,
+            "') WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' ",
+            "WHEN 'null' THEN NULL ELSE CAST(",
+            extract,
+            " AS TEXT) END"
+          ]
+        else
+          extract
+        end
 
-  defp range_clause(expression, {minimum, maximum, label})
-       when is_integer(minimum) and is_integer(maximum),
-       do:
-         {:ok,
-          [
-            "WHEN ",
-            expression,
-            " >= ",
-            Integer.to_string(minimum),
-            " AND ",
-            expression,
-            " <= ",
-            Integer.to_string(maximum),
-            " THEN '",
-            escape_literal(label),
-            "'"
-          ]}
-
-  defp range_clause(expression, {minimum, :infinity, label}) when is_integer(minimum),
-    do:
-      {:ok,
-       [
-         "WHEN ",
-         expression,
-         " >= ",
-         Integer.to_string(minimum),
-         " THEN '",
-         escape_literal(label),
-         "'"
-       ]}
-
-  defp range_clause(expression, {:negative_infinity, maximum, label}) when is_integer(maximum),
-    do:
-      {:ok,
-       [
-         "WHEN ",
-         expression,
-         " <= ",
-         Integer.to_string(maximum),
-         " THEN '",
-         escape_literal(label),
-         "'"
-       ]}
-
-  defp range_clause(_expression, _range), do: {:error, :invalid_range}
-
-  defp date_range_case_sql(expression, ranges) when is_list(ranges) and ranges != [] do
-    ranges
-    |> Enum.map(&date_range_clause(expression, &1))
-    |> collect_case_clauses()
-  end
-
-  defp date_range_case_sql(_expression, _ranges), do: {:error, :empty_ranges}
-
-  defp date_range_clause(expression, {minimum, maximum, label})
-       when is_integer(minimum) and is_integer(maximum) and minimum == maximum,
-       do:
-         {:ok,
-          [
-            "WHEN ",
-            expression,
-            " = DATE('now', '-",
-            Integer.to_string(minimum),
-            " day') THEN '",
-            escape_literal(label),
-            "'"
-          ]}
-
-  defp date_range_clause(expression, {minimum, maximum, label})
-       when is_integer(minimum) and is_integer(maximum),
-       do:
-         {:ok,
-          [
-            "WHEN ",
-            expression,
-            " BETWEEN DATE('now', '-",
-            Integer.to_string(maximum),
-            " day') AND DATE('now', '-",
-            Integer.to_string(minimum),
-            " day') THEN '",
-            escape_literal(label),
-            "'"
-          ]}
-
-  defp date_range_clause(expression, {minimum, :infinity, label}) when is_integer(minimum),
-    do:
-      {:ok,
-       [
-         "WHEN ",
-         expression,
-         " <= DATE('now', '-",
-         Integer.to_string(minimum),
-         " day') THEN '",
-         escape_literal(label),
-         "'"
-       ]}
-
-  defp date_range_clause(expression, {keyword, keyword, label})
-       when keyword in ["today", "yesterday", "tomorrow"] do
-    modifier = %{"today" => "", "yesterday" => "-1 day", "tomorrow" => "+1 day"}[keyword]
-    date = if modifier == "", do: "DATE('now')", else: "DATE('now', '#{modifier}')"
-    {:ok, ["WHEN ", expression, " = ", date, " THEN '", escape_literal(label), "'"]}
-  end
-
-  defp date_range_clause(_expression, _range), do: {:error, :invalid_range}
-
-  defp collect_case_clauses(results) do
-    case Enum.split_with(results, &match?({:ok, _sql}, &1)) do
-      {successes, []} ->
-        {:ok,
-         ["CASE ", Enum.intersperse(Enum.map(successes, &elem(&1, 1)), " "), " ELSE 'Other' END"]}
-
-      {_successes, _errors} ->
-        {:error, :invalid_range}
-    end
-  end
-
-  defp normalized_text(bucket) do
-    base =
-      if bucket.ignore_case,
-        do: ["LOWER(TRIM(", bucket.expression, "))"],
-        else: ["TRIM(", bucket.expression, ")"]
-
-    if bucket.exclude_articles == [] do
-      base
-    else
-      [
-        "CASE ",
-        "WHEN ",
-        base,
-        " LIKE 'the %' THEN SUBSTR(",
-        base,
-        ", 5) ",
-        "WHEN ",
-        base,
-        " LIKE 'an %' THEN SUBSTR(",
-        base,
-        ", 4) ",
-        "WHEN ",
-        base,
-        " LIKE 'a %' THEN SUBSTR(",
-        base,
-        ", 3) ",
-        "ELSE ",
-        base,
-        " END"
+      guarded = [
+        "(SELECT CASE WHEN json_valid(",
+        value,
+        ") THEN ",
+        result,
+        " END FROM (SELECT ",
+        column_ref(fragment),
+        " AS value) AS selecto_extract)"
       ]
+
+      {:ok, cast_json(guarded, fragment.cast)}
+    end
+  rescue
+    error in ArgumentError -> json_validation_error(Exception.message(error), fragment.path)
+  end
+
+  @impl true
+  def render_json_contains(%Contains{} = fragment, selecto) do
+    with :ok <- SelectoDBSQLite.RuntimeCapabilities.require_feature(selecto, :json_contains) do
+      SelectoDBSQLite.JsonContainment.render(column_ref(fragment), fragment.value)
     end
   end
 
   @impl true
-  def render_json_extraction(%Extraction{} = fragment, _selecto) do
-    extraction = ["json_extract(", column_ref(fragment), ", '", json_path(fragment.path), "')"]
-    {:ok, cast_json(extraction, fragment.cast)}
-  end
-
-  @impl true
-  def render_json_contains(%Contains{value: value} = fragment, _selecto)
-      when is_map(value) and not is_struct(value) do
-    with {:ok, members} <- object_members(value, []) do
-      clauses =
-        Enum.map(members, fn {path, path_value} ->
-          typed_json_match(
-            ["json_type(", column_ref(fragment), ", '", object_path(path), "')"],
-            ["json_extract(", column_ref(fragment), ", '", object_path(path), "')"],
-            path_value
-          )
-        end)
-
-      {:ok, valid_json_predicate(fragment, Enum.intersperse(clauses, " AND "))}
+  def render_json_key_exists(%KeyExists{} = fragment, selecto) do
+    with :ok <- SelectoDBSQLite.RuntimeCapabilities.require_feature(selecto, :json) do
+      {:ok,
+       valid_json_predicate(fragment, [
+         "json_type(",
+         column_ref(fragment),
+         ", '",
+         json_path(fragment.path),
+         "') IS NOT NULL"
+       ])}
     end
-  end
-
-  def render_json_contains(%Contains{value: value}, _selecto) do
-    {:error,
-     Selecto.Error.validation_error(
-       "SQLite JSON containment supports only object comparisons",
-       %{unsupported_feature: :json_contains, value: value}
-     )}
-  end
-
-  @impl true
-  def render_json_key_exists(%KeyExists{} = fragment, _selecto) do
-    {:ok,
-     [
-       "json_type(",
-       column_ref(fragment),
-       ", '",
-       json_path(fragment.path),
-       "') IS NOT NULL"
-     ]}
+  rescue
+    error in ArgumentError -> json_validation_error(Exception.message(error), fragment.path)
   end
 
   @impl true
@@ -354,8 +108,8 @@ defmodule SelectoDBSQLite.Dialect do
     render_array_members(fragment, values, " OR ", "0", selecto)
   end
 
-  def render_json_array_contains(%ArrayContains{} = fragment, _selecto) do
-    render_array_members(fragment, [fragment.value], " OR ", "0", nil)
+  def render_json_array_contains(%ArrayContains{} = fragment, selecto) do
+    render_array_members(fragment, [fragment.value], " OR ", "0", selecto)
   end
 
   @impl true
@@ -363,8 +117,9 @@ defmodule SelectoDBSQLite.Dialect do
     render_array_members(fragment, fragment.values, " AND ", "1", selecto)
   end
 
-  defp render_array_members(fragment, values, operator, empty, _selecto) when is_list(values) do
-    if Enum.all?(values, &json_scalar?/1) do
+  defp render_array_members(fragment, values, operator, empty, selecto) when is_list(values) do
+    with :ok <- SelectoDBSQLite.RuntimeCapabilities.require_feature(selecto, :json),
+         true <- Enum.all?(values, &json_scalar?/1) do
       members =
         Enum.map(values, fn value ->
           [
@@ -391,15 +146,29 @@ defmodule SelectoDBSQLite.Dialect do
          ")"
        ])}
     else
-      json_validation_error("SQLite JSON array membership supports only scalar values", values)
+      {:error, _} = error ->
+        error
+
+      _ ->
+        json_validation_error("SQLite JSON array membership supports only scalar values", values)
     end
+  rescue
+    error in ArgumentError -> json_validation_error(Exception.message(error), fragment.path)
   end
 
   defp render_array_members(_fragment, values, _operator, _empty, _selecto),
     do: json_validation_error("SQLite JSON array membership requires a list of values", values)
 
   defp valid_json_predicate(fragment, predicate),
-    do: ["(CASE WHEN json_valid(", column_ref(fragment), ") THEN (", predicate, ") ELSE 0 END)"]
+    do: [
+      "(CASE WHEN ",
+      column_ref(fragment),
+      " IS NULL THEN NULL WHEN json_valid(",
+      column_ref(fragment),
+      ") THEN (",
+      predicate,
+      ") ELSE 0 END)"
+    ]
 
   defp typed_json_match(type, _value, :object), do: [type, " = 'object'"]
   defp typed_json_match(type, _value, nil), do: [type, " = 'null'"]
@@ -425,70 +194,52 @@ defmodule SelectoDBSQLite.Dialect do
 
   @impl true
   def render_json_operation(%Operation{} = operation, selecto) do
-    case operation.operation do
-      :json_extract ->
-        operation_extraction(operation, false, selecto)
+    with :ok <- SelectoDBSQLite.RuntimeCapabilities.require_feature(selecto, :json) do
+      case operation.operation do
+        :json_extract ->
+          operation_extraction(operation, false, selecto)
 
-      :json_extract_text ->
-        operation_extraction(operation, true, selecto)
+        :json_extract_text ->
+          operation_extraction(operation, true, selecto)
 
-      :json_contains ->
-        render_json_contains(operation_contains(operation), selecto)
+        :json_contains ->
+          render_json_contains(operation_contains(operation), selecto)
 
-      :json_agg ->
-        {:ok, ["json_group_array(", operation_column(operation), ")"]}
+        :json_agg ->
+          {:ok, ["json_group_array(", operation_column(operation), ")"]}
 
-      :json_build_object ->
-        {:ok, ["json_object(", Map.fetch!(operation.options, :pairs_sql), ")"]}
+        :json_build_object ->
+          {:ok, ["json_object(", Map.fetch!(operation.options, :pairs_sql), ")"]}
 
-      :json_empty_array ->
-        {:ok, "'[]'"}
+        :json_empty_array ->
+          {:ok, "'[]'"}
 
-      kind when kind in [:json_exists, :json_path_exists] ->
-        render_json_key_exists(operation_key_exists(operation), selecto)
+        kind when kind in [:json_exists, :json_path_exists] ->
+          render_json_key_exists(operation_key_exists(operation), selecto)
 
-      :json_typeof ->
-        {:ok, json_path_function("json_type", operation)}
+        :json_typeof ->
+          {:ok, json_path_function("json_type", operation)}
 
-      :json_array_length ->
-        {:ok, json_path_function("json_array_length", operation)}
+        :json_array_length ->
+          {:ok, json_path_function("json_array_length", operation)}
 
-      _operation ->
-        {:error,
-         Selecto.Error.validation_error("SQLite does not support this JSON operation", %{
-           operation: operation.operation,
-           unsupported_feature: :json_operation
-         })}
+        _operation ->
+          {:error,
+           Selecto.Error.validation_error("SQLite does not support this JSON operation", %{
+             operation: operation.operation,
+             unsupported_feature: :json_operation
+           })}
+      end
     end
   end
 
   @impl true
-  def render_collection_operation(%CollectionOperation{} = operation, _selecto) do
-    case operation.operation do
-      :array_agg when operation.order_by in [nil, []] ->
-        distinct = if operation.distinct, do: "DISTINCT ", else: ""
-        {:ok, ["json_group_array(", distinct, operation.column, ")"]}
+  def render_collection_operation(%CollectionOperation{} = operation, selecto),
+    do: SelectoDBSQLite.Collections.render(operation, selecto)
 
-      :string_agg when not operation.distinct and operation.order_by in [nil, []] ->
-        delimiter = Map.get(operation.options, :delimiter, ",")
-
-        {:ok,
-         {[
-            "group_concat(",
-            operation.column,
-            ", ",
-            {:param, delimiter},
-            ")"
-          ], [delimiter]}}
-
-      unsupported ->
-        {:error,
-         Selecto.Error.validation_error("SQLite does not support this collection operation", %{
-           operation: unsupported,
-           unsupported_feature: :collection_operation
-         })}
-    end
-  end
+  @impl true
+  def render_table_function_join(join, selecto),
+    do: SelectoDBSQLite.Collections.join(join, selecto)
 
   defp operation_extraction(operation, as_text, selecto) do
     render_json_extraction(
@@ -584,41 +335,6 @@ defmodule SelectoDBSQLite.Dialect do
       else: raise(ArgumentError, "invalid JSON path segment: #{inspect(segment)}")
   end
 
-  # Keep a type check for every object, including empty objects. Numeric object
-  # keys are labels rather than array indexes, so containment has its own path.
-  defp object_members(map, prefix) do
-    map
-    |> Enum.sort_by(fn {key, _value} -> inspect(key) end)
-    |> Enum.reduce_while({:ok, [{prefix, :object}]}, fn {key, value}, {:ok, members} ->
-      cond do
-        not (is_binary(key) or is_atom(key) or is_integer(key)) ->
-          {:halt, json_validation_error("Invalid SQLite JSON object key", key)}
-
-        String.contains?(to_string(key), ["\"", "\\", <<0>>]) ->
-          {:halt, json_validation_error("Unsupported SQLite JSON object key", key)}
-
-        is_map(value) and not is_struct(value) ->
-          case object_members(value, prefix ++ [to_string(key)]) do
-            {:ok, nested} -> {:cont, {:ok, members ++ nested}}
-            error -> {:halt, error}
-          end
-
-        json_scalar?(value) ->
-          {:cont, {:ok, members ++ [{prefix ++ [to_string(key)], value}]}}
-
-        true ->
-          {:halt,
-           json_validation_error(
-             "SQLite JSON containment supports scalar and object members",
-             value
-           )}
-      end
-    end)
-  end
-
-  defp object_path(path),
-    do: ["$" | Enum.map(path, &[".\"", &1, "\""])] |> IO.iodata_to_binary() |> escape_literal()
-
   defp cast_json(extraction, nil), do: extraction
   defp cast_json(extraction, :integer), do: ["CAST(", extraction, " AS INTEGER)"]
   defp cast_json(extraction, :decimal), do: ["CAST(", extraction, " AS NUMERIC)"]
@@ -657,6 +373,7 @@ defmodule SelectoDBSQLite.Dialect do
   def render_text_search_rank(%Rank{} = rank, selecto) do
     with :ok <- require_rank_fields(rank.fields),
          :ok <- validate_weights(rank.weights),
+         :ok <- ensure_runtime_available(selecto),
          {:ok, source_table} <- rank_source_table(selecto, rank.fields) do
       weight_args =
         case rank.weights do
@@ -698,24 +415,8 @@ defmodule SelectoDBSQLite.Dialect do
         )
   end
 
-  defp ensure_runtime_available(selecto) do
-    adapter = Map.get(selecto, :adapter)
-    connection = Selecto.Runtime.Context.connection(selecto)
-
-    cond do
-      connection in [nil, [], %{}] ->
-        :ok
-
-      not Selecto.AdapterSupport.callback_available?(adapter, :fts5_available?, 1) ->
-        :ok
-
-      adapter.fts5_available?(connection) ->
-        :ok
-
-      true ->
-        error("SQLite FTS5 is not available on the current connection", runtime: :unavailable)
-    end
-  end
+  defp ensure_runtime_available(selecto),
+    do: SelectoDBSQLite.RuntimeCapabilities.require_feature(selecto, :text_search)
 
   defp search_query(value, :phrase) when is_binary(value) do
     if String.starts_with?(value, "\"") and String.ends_with?(value, "\"") do
@@ -796,19 +497,6 @@ defmodule SelectoDBSQLite.Dialect do
   end
 
   defp safe_existing_atom(_field), do: nil
-
-  defp temporal_conversion_requested?(options) do
-    Map.get(options, :epoch_storage) not in [nil, false] or
-      Map.get(options, :timezone) not in [nil, ""]
-  end
-
-  defp unsupported_datetime(operation) do
-    {:error,
-     Selecto.Error.validation_error("SQLite does not support this datetime operation", %{
-       operation: operation.operation,
-       unsupported_feature: :datetime_operation
-     })}
-  end
 
   defp error(message, details \\ []) do
     {:error,

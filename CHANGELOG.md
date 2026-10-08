@@ -4,7 +4,16 @@
 
 - Correct ordinary JSON object/scalar-array predicates with type-aware null,
   boolean, numeric and text comparisons, object/array guards, empty-object and
-  empty-any/all semantics, and structured refusals for nested-array requests.
+  empty-any/all semantics, and recursive object/array containment with bound keys.
+- Add computed casts/JSON text/fractional division, ISO calendar/date operations,
+  UTC epoch conversion, negative numeric/date/text buckets, ordered/distinct
+  aggregates, JSON-backed array predicates and native array rowsets.
+- Report connected version/compile options and extension probes, and refuse
+  unsupported JSON, FTS5, aggregate-order and calendar-shift operations.
+- Preserve read-only query state with serialized per-connection ownership across
+  public reads and stream enumeration, including errors and consumer termination.
+- Enforce captured-query insert admission using actual storage affinity and
+  collation; reject unprovable transforms/defaults/triggers before writes.
 - Apply and validate documented connection pragmas, driver modes and native
   extension loading; fail setup on invalid options or failed extensions.
 - Add incremental deadline-aware row streams, structured relation/column/key/

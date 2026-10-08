@@ -157,6 +157,7 @@ defmodule SelectoDBSQLite.Adapter do
 
   @impl true
   def disconnect(connection) when is_reference(connection) do
+    SelectoDBSQLite.QueryGuard.close(connection)
     Exqlite.Sqlite3.close(connection)
   end
 
@@ -178,6 +179,14 @@ defmodule SelectoDBSQLite.Adapter do
 
   @impl true
   def execute_raw(connection, query, params), do: execute(connection, query, params, [])
+
+  @doc "Executes a governed read while preserving caller-owned query_only state."
+  @impl true
+  def execute_query(connection, query, params, opts),
+    do:
+      SelectoDBSQLite.QueryGuard.run(connection, fn ->
+        execute(connection, query, params, opts)
+      end)
 
   @impl true
   def stream(connection, query, params, opts) do
@@ -214,8 +223,16 @@ defmodule SelectoDBSQLite.Adapter do
 
   @impl true
   def connection_info(connection) do
-    %{adapter: :sqlite, server_version: sqlite_version(connection)}
+    connection_capabilities(connection) |> Map.put(:adapter, :sqlite)
   end
+
+  @doc "Connected SQLite version, build options, and feature probes."
+  def connection_capabilities(connection),
+    do: SelectoDBSQLite.RuntimeCapabilities.inspect_connection(connection)
+
+  @doc "Whether the supplied connection supports a feature in this provider."
+  def supports?(connection, feature),
+    do: Map.get(connection_capabilities(connection).features, feature, false)
 
   @impl true
   def placeholder(_index), do: "?"
@@ -227,34 +244,12 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   @impl true
-  def format_datetime(sel_iodata, "YYYY-MM-DD"),
-    do: ["strftime('%Y-%m-%d', ", sel_iodata, ")"]
-
-  def format_datetime(sel_iodata, "YYYY-MM-DD HH24"),
-    do: ["strftime('%Y-%m-%d %H', ", sel_iodata, ")"]
-
-  def format_datetime(sel_iodata, "YYYY-MM"),
-    do: ["strftime('%Y-%m', ", sel_iodata, ")"]
-
-  def format_datetime(sel_iodata, "YYYY-WW"),
-    do: ["strftime('%Y-%W', ", sel_iodata, ")"]
-
-  def format_datetime(sel_iodata, "YYYY-Q") do
-    [
-      "strftime('%Y', ",
-      sel_iodata,
-      ") || '-' || CAST(((CAST(strftime('%m', ",
-      sel_iodata,
-      ") AS INTEGER) - 1) / 3 + 1) AS INTEGER)"
-    ]
+  def format_datetime(expression, format) do
+    case SelectoDBSQLite.Calendar.format(expression, format) do
+      {:ok, sql} -> sql
+      {:error, error} -> raise error
+    end
   end
-
-  def format_datetime(sel_iodata, "YYYY"), do: ["strftime('%Y', ", sel_iodata, ")"]
-  def format_datetime(sel_iodata, "MM"), do: ["strftime('%m', ", sel_iodata, ")"]
-  def format_datetime(sel_iodata, "DD"), do: ["strftime('%d', ", sel_iodata, ")"]
-  def format_datetime(sel_iodata, "D"), do: ["strftime('%w', ", sel_iodata, ")"]
-  def format_datetime(sel_iodata, "HH24"), do: ["strftime('%H', ", sel_iodata, ")"]
-  def format_datetime(sel_iodata, _format), do: ["CAST(", sel_iodata, " AS TEXT)"]
 
   @impl true
   def rollup_literal_order(index), do: [Integer.to_string(index), " asc"]
@@ -290,14 +285,17 @@ defmodule SelectoDBSQLite.Adapter do
 
   @impl Selecto.DB.WriteAdapter
   def write_capabilities(connection) do
-    version = sqlite_version(connection)
-    returning? = returning_version?(version)
+    runtime = connection_capabilities(connection)
+    version = runtime.server_version
+    returning? = runtime.features.returning
 
     %{
       protocol_version: Selecto.Write.Capabilities.protocol_version(),
       insert: true,
       update: true,
-      upsert: true,
+      upsert:
+        SelectoDBSQLite.RuntimeCapabilities.version_at_least?(version, {3, 24, 0}) and
+          "OMIT_UPSERT" not in runtime.compile_options,
       delete: true,
       returning: returning?,
       generated_keys: if(returning?, do: :returning, else: false),
@@ -305,6 +303,8 @@ defmodule SelectoDBSQLite.Adapter do
       atomic_batch: true,
       write_graph: returning?,
       prepared_candidate_state: true,
+      typed_insert_admission: runtime.features.schema_introspection,
+      typed_insert_precision: false,
       merge: false,
       dialect: :sqlite,
       server_version: version
@@ -606,7 +606,8 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   defp execute_write_command(connection, command, opts) do
-    with {:ok, statement} <- WriteCompiler.compile(command, opts),
+    with :ok <- SelectoDBSQLite.InsertAdmission.enforce(connection, command, opts),
+         {:ok, statement} <- WriteCompiler.compile(command, opts),
          {:ok, query_result} <- execute(connection, statement.text, statement.params, opts),
          {:ok, affected_rows} <- enforce_cardinality(command, query_result) do
       {:ok,
@@ -1082,26 +1083,6 @@ defmodule SelectoDBSQLite.Adapter do
       end
     end
   end
-
-  defp sqlite_version(connection) do
-    case execute(connection, "SELECT sqlite_version()", [], []) do
-      {:ok, %{rows: [[version] | _]}} when is_binary(version) -> version
-      _ -> nil
-    end
-  rescue
-    _exception -> nil
-  catch
-    :exit, _reason -> nil
-  end
-
-  defp returning_version?(version) when is_binary(version) do
-    case version |> String.split(".") |> Enum.take(3) |> Enum.map(&Integer.parse/1) do
-      [{major, ""}, {minor, ""}, {patch, ""}] -> {major, minor, patch} >= {3, 35, 0}
-      _ -> false
-    end
-  end
-
-  defp returning_version?(_version), do: false
 
   defp ensure_exqlite do
     if Code.ensure_loaded?(Exqlite.Sqlite3), do: :ok, else: {:error, @missing_dependency}

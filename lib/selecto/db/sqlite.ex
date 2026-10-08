@@ -15,9 +15,12 @@ defmodule Selecto.DB.SQLite do
   defdelegate disconnect(connection), to: SelectoDBSQLite.Adapter
   defdelegate execute(connection, query, params, opts), to: SelectoDBSQLite.Adapter
   defdelegate execute_raw(connection, query, params), to: SelectoDBSQLite.Adapter
+  defdelegate execute_query(connection, query, params, opts), to: SelectoDBSQLite.Adapter
   defdelegate stream(connection, query, params, opts), to: SelectoDBSQLite.Adapter
   defdelegate validate_connection(connection), to: SelectoDBSQLite.Adapter
   defdelegate connection_info(connection), to: SelectoDBSQLite.Adapter
+  defdelegate connection_capabilities(connection), to: SelectoDBSQLite.Adapter
+  defdelegate supports?(connection, feature), to: SelectoDBSQLite.Adapter
   defdelegate list_tables(connection, opts \\ []), to: SelectoDBSQLite.Adapter
   defdelegate list_relations(connection, opts \\ []), to: SelectoDBSQLite.Adapter
   defdelegate introspect_table(connection, table, opts \\ []), to: SelectoDBSQLite.Adapter

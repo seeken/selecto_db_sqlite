@@ -65,14 +65,8 @@ defmodule SelectoDBSQLite.JsonPredicatesTest do
     assert contains(context.connection, %{"a" => %{"b" => %{}}}) == [1, 5]
     assert contains(context.connection, %{"0" => %{"a.b" => "O'Brien"}}) == [6]
 
-    assert {:error, %Selecto.Error{type: :validation_error}} =
-             Dialect.render_json_contains(%Contains{column: "body", value: %{"a" => []}}, %{})
-
-    assert {:error, %Selecto.Error{type: :validation_error}} =
-             Dialect.render_json_contains(
-               %Contains{column: "body", value: %{"a" => %{bad: [[1]]}}},
-               %{}
-             )
+    assert contains(context.connection, %{"a" => []}) == [4]
+    assert contains(context.connection, %{"a" => %{"bad" => [[1]]}}) == []
   end
 
   test "malformed documents and SQL null do not throw or satisfy containment", context do
@@ -86,6 +80,46 @@ defmodule SelectoDBSQLite.JsonPredicatesTest do
 
     assert contains(context.connection, %{}) == [3]
     assert contains(context.connection, %{"a" => nil}) == []
+  end
+
+  test "JSON extraction uses text booleans, casts and guarded malformed input", context do
+    seed(context.connection, [%{"a" => true}, %{"a" => false}, %{"a" => nil}, %{"a" => 1}, %{}])
+
+    {:ok, extraction} =
+      Dialect.render_json_extraction(
+        %Selecto.Dialect.Json.Extraction{column: "body", path: ["a"], as_text: true},
+        %{}
+      )
+
+    {sql, params} =
+      Selecto.SQL.Params.finalize(["SELECT ", extraction, " FROM documents ORDER BY id"],
+        adapter: Adapter
+      )
+
+    assert {:ok, %{rows: [["true"], ["false"], [nil], ["1"], [nil]]}} =
+             Adapter.execute(context.connection, sql, params, [])
+
+    {:ok, _} =
+      Adapter.execute(
+        context.connection,
+        "INSERT INTO documents VALUES (6, 'not json'), (7, NULL)",
+        [],
+        []
+      )
+
+    {:ok, exists} =
+      Dialect.render_json_key_exists(
+        %Selecto.Dialect.Json.KeyExists{column: "body", path: ["a"]},
+        %{}
+      )
+
+    {sql, params} =
+      Selecto.SQL.Params.finalize(["SELECT ", exists, " FROM documents ORDER BY id"],
+        adapter: Adapter
+      )
+
+    assert {:ok, %{rows: [[1], [1], [1], [1], [0], [0], [nil]]}} =
+             Adapter.execute(context.connection, sql, params, [])
   end
 
   test "array membership compares typed scalars and rejects non-array paths", context do

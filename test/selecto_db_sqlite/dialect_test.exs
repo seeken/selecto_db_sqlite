@@ -43,7 +43,7 @@ defmodule SelectoDBSQLite.DialectTest do
           {"YYYY-MM-DD", "%Y-%m-%d"},
           {"YYYY-MM-DD HH24", "%Y-%m-%d %H"},
           {"YYYY-MM", "%Y-%m"},
-          {"YYYY-WW", "%Y-%W"},
+          {"YYYY-WW", "%j"},
           {"YYYY-Q", "strftime('%m'"},
           {"D", "%w"}
         ] do
@@ -81,13 +81,21 @@ defmodule SelectoDBSQLite.DialectTest do
     }
 
     assert {:ok, numeric_sql} = Dialect.render_bucket(numeric, %{})
-    assert IO.iodata_to_binary(numeric_sql) =~ "price >= 0 AND price <= 10"
+
+    assert elem(Selecto.SQL.Params.finalize(numeric_sql, adapter: SelectoDBSQLite.Adapter), 0) =~
+             "selecto_bucket.value >= 0 AND selecto_bucket.value <= 10"
 
     assert {:ok, relative_sql} = Dialect.render_bucket(relative, %{})
-    assert IO.iodata_to_binary(relative_sql) =~ "DATE('now')"
+
+    assert elem(Selecto.SQL.Params.finalize(relative_sql, adapter: SelectoDBSQLite.Adapter), 0) =~
+             "DATE('now')"
 
     assert {:ok, prefix_sql} = Dialect.render_bucket(prefix, %{})
-    assert IO.iodata_to_binary(prefix_sql) =~ "UPPER(SUBSTR("
-    assert IO.iodata_to_binary(prefix_sql) =~ "LIKE 'the %'"
+
+    assert elem(Selecto.SQL.Params.finalize(prefix_sql, adapter: SelectoDBSQLite.Adapter), 0) =~
+             "UPPER(SUBSTR("
+
+    assert elem(Selecto.SQL.Params.finalize(prefix_sql, adapter: SelectoDBSQLite.Adapter), 0) =~
+             "substr("
   end
 end
