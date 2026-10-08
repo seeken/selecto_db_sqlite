@@ -303,7 +303,9 @@ defmodule SelectoDBSQLite.Adapter do
       atomic_batch: true,
       write_graph: returning?,
       prepared_candidate_state: true,
-      typed_insert_admission: runtime.features.schema_introspection,
+      typed_insert_admission:
+        runtime.features.schema_introspection and
+          SelectoDBSQLite.RuntimeCapabilities.version_at_least?(version, {3, 37, 0}),
       typed_insert_precision: false,
       merge: false,
       dialect: :sqlite,

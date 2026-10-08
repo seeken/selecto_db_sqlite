@@ -142,6 +142,61 @@ defmodule SelectoDBSQLite.InsertAdmissionTest do
     assert count(connection) == 0
   end
 
+  for {kind, ddl} <- [
+        {:table, "CREATE TEMP TABLE ITEMS(id INTEGER, subject TEXT)"},
+        {:view, "CREATE TEMP VIEW ITEMS AS SELECT id,subject FROM main.items"}
+      ] do
+    test "uppercase TEMP #{kind} shadow refuses guarded insert", %{connection: connection} do
+      execute!(connection, "CREATE TABLE items(id INTEGER PRIMARY KEY,subject TEXT)")
+      execute!(connection, unquote(ddl))
+      guard = {:eq, {:field, "subject"}, {:literal, "active"}}
+
+      assert {:error, %Error{details: %{code: :query_rule_not_evaluable}}} =
+               Adapter.execute_write_unsafe(connection, command("active", :string, guard))
+
+      for table <- ["main.items", "temp.ITEMS"] do
+        assert {:ok, %{rows: [[0]]}} =
+                 Adapter.execute(connection, "SELECT count(*) FROM " <> table, [], [])
+      end
+    end
+  end
+
+  test "unselected generated storage refuses guarded insert", %{connection: connection} do
+    execute!(
+      connection,
+      "CREATE TABLE items(id INTEGER PRIMARY KEY,subject TEXT,derived TEXT GENERATED ALWAYS AS (lower(subject)))"
+    )
+
+    guard = {:eq, {:field, "subject"}, {:literal, "active"}}
+
+    assert {:error, %Error{details: %{code: :query_rule_not_evaluable}}} =
+             Adapter.execute_write_unsafe(connection, command("active", :string, guard))
+
+    assert count(connection) == 0
+  end
+
+  test "FTS5 shadow table cannot establish ordinary insert storage", %{connection: connection} do
+    execute!(connection, "CREATE VIRTUAL TABLE documents USING fts5(body)")
+    guard = {:eq, {:field, "id"}, {:literal, 91}}
+
+    candidate = %{
+      command("active", :string, guard)
+      | relation: "documents_data",
+        assignments: [%{field: "id", value: {:literal, 91}}]
+    }
+
+    assert {:error, %Error{details: %{code: :query_rule_not_evaluable}}} =
+             Adapter.execute_write_unsafe(connection, candidate)
+
+    assert {:ok, %{rows: [[0]]}} =
+             Adapter.execute(
+               connection,
+               "SELECT count(*) FROM documents_data WHERE id=91",
+               [],
+               []
+             )
+  end
+
   test "guarded NULL integer primary keys cannot hide rowid generation", %{connection: connection} do
     execute!(connection, "CREATE TABLE items (id INTEGER PRIMARY KEY, subject TEXT)")
 

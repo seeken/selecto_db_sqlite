@@ -236,9 +236,12 @@ External native-driver operations can bypass this ownership protocol.
 Captured-query inserts prove the guard against canonical candidate values using
 the table's actual affinity and BINARY/NOCASE/RTRIM collation before DML. Guarded
 fields must be supplied explicitly. Unsupported types, generated/default-dependent
-guard fields, triggers, views/virtual tables, and temp-table shadows fail with
+guard fields, triggers, views/virtual or shadow tables, generated columns anywhere
+in the table, and case-insensitive TEMP table/view shadows fail with
 `query_rule_not_evaluable`; false/NULL guards return `query_rule_violation`.
-No row is changed on refusal. Fixed-scale insert precision remains unsupported.
+No row is changed on refusal. Ordinary storage proof uses `PRAGMA table_list`
+and requires SQLite 3.37 or later; the live capability reflects that version
+floor. Fixed-scale insert precision remains unsupported.
 
 All SQLite tests use `:memory:` databases, or a named
 `file:name?mode=memory&cache=shared` URI when separate handles must share state.

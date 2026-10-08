@@ -57,6 +57,13 @@ defmodule SelectoDBSQLite.InsertAdmission do
              opts
            ),
          true <- is_binary(ddl) and Regex.match?(~r/\ACREATE\s+TABLE\b/i, ddl),
+         {:ok, %{rows: [["table"]]}} <-
+           Adapter.execute(
+             connection,
+             "SELECT type FROM pragma_table_list WHERE schema = 'main' AND name = ? COLLATE NOCASE",
+             [table],
+             opts
+           ),
          {:ok, %{rows: []}} <-
            Adapter.execute(
              connection,
@@ -71,7 +78,7 @@ defmodule SelectoDBSQLite.InsertAdmission do
              [],
              opts
            ),
-         true <- rows != [],
+         true <- rows != [] and Enum.all?(rows, &match?([_, _, _, _, _, _, 0], &1)),
          {:ok, collations} <- column_collations(ddl) do
       {:ok,
        Map.new(rows, fn [_cid, name, type, _notnull, _default, pk, hidden] ->
