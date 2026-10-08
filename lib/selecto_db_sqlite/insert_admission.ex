@@ -41,7 +41,8 @@ defmodule SelectoDBSQLite.InsertAdmission do
     end
   end
 
-  defp storage_schema(connection, table, opts) do
+  @doc false
+  def storage_schema(connection, table, opts) do
     with {:ok, %{rows: []}} <-
            Adapter.execute(
              connection,

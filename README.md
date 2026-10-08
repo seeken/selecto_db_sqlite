@@ -383,3 +383,17 @@ the named synthetic subset, not general document database portability.
 ## License
 
 Apache 2.0
+
+Required canonical data rules use adapter-owned prepared transactions on SQLite
+3.37 or newer. A rollback-only private TEMP row applies the physical column's
+actual affinity and built-in collation before candidate and transaction rules
+run. Protected updates load declared source fields and scoped collection deltas
+load at most 1,000 children. Stored normalizers retain field grants and write-once
+guards; repeated selectors for one physical row refuse stale snapshots. Public
+prepared previews use the same native projection and preserve host transactions.
+
+Native rule admission refuses trigger-bearing targets, any generated or hidden
+column, virtual/shadow tables, TEMP catalog shadows, custom collations, ambiguous
+storage types, and unresolved generated values or required external evidence.
+Upsert and delete rules requiring a final candidate remain explicit refusals.
+All SQLite tests use in-memory databases.

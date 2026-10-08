@@ -303,6 +303,8 @@ defmodule SelectoDBSQLite.Adapter do
       atomic_batch: true,
       write_graph: returning?,
       prepared_candidate_state: true,
+      native_rule_candidates:
+        SelectoDBSQLite.RuntimeCapabilities.version_at_least?(version, {3, 37, 0}),
       typed_insert_admission:
         runtime.features.schema_introspection and
           SelectoDBSQLite.RuntimeCapabilities.version_at_least?(version, {3, 37, 0}),
@@ -322,6 +324,45 @@ defmodule SelectoDBSQLite.Adapter do
   def preview_write(_connection, %Batch{} = batch, opts), do: WriteCompiler.preview(batch, opts)
   def preview_write(_connection, %Graph{} = graph, opts), do: preview_graph(graph, opts)
   def preview_write(_connection, write, _opts), do: invalid_write_input(write)
+
+  @impl Selecto.DB.WriteAdapter
+  def preview_prepared_write(connection, prepare, opts) when is_function(prepare, 1) do
+    tag = make_ref()
+    tracker = make_ref()
+
+    try do
+      outcome =
+        transaction(
+          connection,
+          fn tx ->
+            loader =
+              &load_prepared_state(
+                tx,
+                &1,
+                Keyword.put(opts, :protected_candidate_tracker, tracker)
+              )
+
+            result =
+              with {:ok, write, context} <- prepare.(loader),
+                   :ok <- validate_prepared_write(write),
+                   :ok <- Capabilities.require(write_capabilities(tx), write) do
+                preview_write(tx, write, Keyword.put(opts, :context, context))
+              end
+
+            {:error, {tag, result}}
+          end,
+          opts
+        )
+
+      case outcome do
+        {:error, {^tag, result}} -> result
+        {:error, %Error{} = error} -> {:error, error}
+        {:error, reason} -> {:error, write_error(:transaction_failed, reason)}
+      end
+    after
+      Process.delete(tracker)
+    end
+  end
 
   @doc """
   Executes a governed write.
@@ -410,16 +451,22 @@ defmodule SelectoDBSQLite.Adapter do
   def execute_prepared_write_unsafe(connection, prepare_fun, opts)
       when is_function(prepare_fun, 1) do
     with_write_transaction(connection, opts, fn tx ->
-      loader = &load_prepared_state(tx, &1, opts)
+      tracker = make_ref()
+      prepared_opts = Keyword.put(opts, :protected_candidate_tracker, tracker)
+      loader = &load_prepared_state(tx, &1, prepared_opts)
 
-      with {:ok, write, context} <- prepare_fun.(loader),
-           :ok <- validate_prepared_write(write),
-           :ok <- Capabilities.require(write_capabilities(tx), write) do
-        execute_prepared(tx, write, Keyword.put(opts, :context, context))
-      else
-        {:error, %Error{} = error} -> {:error, error}
-        {:error, reason} -> {:error, write_error(:candidate_preparation_failed, reason)}
-        other -> {:error, write_error(:candidate_preparation_failed, other)}
+      try do
+        with {:ok, write, context} <- prepare_fun.(loader),
+             :ok <- validate_prepared_write(write),
+             :ok <- Capabilities.require(write_capabilities(tx), write) do
+          execute_prepared(tx, write, Keyword.put(opts, :context, context))
+        else
+          {:error, %Error{} = error} -> {:error, error}
+          {:error, reason} -> {:error, write_error(:candidate_preparation_failed, reason)}
+          other -> {:error, write_error(:candidate_preparation_failed, other)}
+        end
+      after
+        Process.delete(tracker)
       end
     end)
   end
@@ -434,14 +481,32 @@ defmodule SelectoDBSQLite.Adapter do
   @doc false
   def load_record_state(connection, %RecordRequest{} = request, opts \\ []) do
     with :ok <- valid_record_request(request),
+         {:ok, schema} <-
+           relation_storage_schema(connection, request.relation, opts),
+         {:ok, witness} <- physical_row_witness(connection, request.relation, schema, opts),
+         physical_fields = Enum.map(witness, fn _ -> physical_result_field(schema) end),
+         witness_sql =
+           Enum.zip(witness, physical_fields)
+           |> Enum.map_join(", ", fn {field, alias_field} ->
+             "#{quote_identifier(field)} AS #{quote_identifier(alias_field)}"
+           end),
+         {:ok, ownership} <-
+           record_ownership_predicate(connection, request.ownership, request.context, opts),
          {:ok, predicate} <-
            WriteCompiler.compile_predicate(request.predicate, context: request.context),
          fields = request.fields |> Enum.map(&to_string/1) |> Enum.uniq() |> Enum.sort(),
          query =
-           "SELECT #{Enum.map_join(fields, ", ", &quote_identifier/1)} FROM " <>
-             "#{quote_relation(request.relation)} WHERE #{predicate.text}",
-         {:ok, result} <- execute(connection, query, predicate.params, opts),
-         {:ok, values} <- exactly_one_record(result) do
+           "SELECT #{witness_sql}, #{Enum.map_join(fields, ", ", &quote_identifier/1)} FROM " <>
+             "#{quote_relation(request.relation)} WHERE (#{predicate.text})" <> ownership.text,
+         {:ok, result} <- execute(connection, query, predicate.params ++ ownership.params, opts),
+         {:ok, values} <- exactly_one_record(result),
+         :ok <-
+           track_physical_record(
+             request,
+             Enum.map(physical_fields, &Map.fetch!(values, &1)),
+             opts
+           ),
+         values = Map.drop(values, physical_fields) do
       {:ok, %RecordState{values: values, complete?: true, protection: :locked}}
     end
   end
@@ -449,6 +514,11 @@ defmodule SelectoDBSQLite.Adapter do
   @doc false
   def load_candidate_state(connection, %CandidateRequest{} = request, opts \\ []) do
     with :ok <- valid_candidate_request(request),
+         {:ok, _} <-
+           relation_storage_schema(connection, request.parent_command.relation, opts),
+         {:ok, _} <-
+           relation_storage_schema(connection, request.child_relation, opts),
+         {:ok, child_scope} <- compile_candidate_scope(request.scope_predicate, request.context),
          {:ok, predicate} <-
            WriteCompiler.compile_predicate(request.parent_command.predicate,
              context: request.context
@@ -466,12 +536,145 @@ defmodule SelectoDBSQLite.Adapter do
          child_query =
            "SELECT #{Enum.map_join(fields, ", ", &quote_identifier/1)} FROM " <>
              "#{quote_relation(request.child_relation)} WHERE #{quote_identifier(request.child_key)} = ? " <>
+             if(request.scope_predicate, do: "AND (#{child_scope.text}) ", else: "") <>
              "ORDER BY #{Enum.map_join(request.identity_fields, ", ", &quote_identifier/1)} LIMIT ?",
          {:ok, child_result} <-
-           execute(connection, child_query, [parent_id, request.max_rows + 1], opts),
+           execute(
+             connection,
+             child_query,
+             [parent_id] ++ child_scope.params ++ [request.max_rows + 1],
+             opts
+           ),
          :ok <- candidate_bound(child_result, request.max_rows) do
       {:ok,
        %CandidateState{rows: result_rows(child_result), complete?: true, protection: :locked}}
+    end
+  end
+
+  defp record_ownership_predicate(_connection, nil, _context, _opts),
+    do: {:ok, %{text: "", params: []}}
+
+  defp record_ownership_predicate(
+         connection,
+         %{parent_command: %Command{} = parent, parent_key: parent_key, child_key: child_key},
+         context,
+         opts
+       ) do
+    with true <- parent.operation in [:update, :delete],
+         {:ok, _} <-
+           relation_storage_schema(connection, parent.relation, opts),
+         {:ok, predicate} <- WriteCompiler.compile_predicate(parent.predicate, context: context),
+         query =
+           "SELECT #{quote_identifier(parent_key)} FROM #{quote_relation(parent.relation)} WHERE #{predicate.text}",
+         {:ok, result} <- execute(connection, query, predicate.params, opts),
+         {:ok, parent_id} <- exactly_one_parent(result) do
+      {:ok, %{text: " AND #{quote_identifier(child_key)} = ?", params: [parent_id]}}
+    else
+      _ ->
+        {:error,
+         Error.new(:validation, "owned candidate anchor is unavailable",
+           details: %{code: :required_data_rule_pending}
+         )}
+    end
+  end
+
+  defp record_ownership_predicate(_connection, _ownership, _context, _opts),
+    do:
+      {:error,
+       Error.new(:validation, "owned candidate anchor is invalid",
+         details: %{code: :required_data_rule_pending}
+       )}
+
+  defp compile_candidate_scope(nil, _context), do: {:ok, %{text: "", params: []}}
+
+  defp compile_candidate_scope(predicate, context),
+    do: WriteCompiler.compile_predicate(predicate, context: context)
+
+  defp relation_storage_schema(connection, relation, opts) do
+    case String.split(to_string(relation), ".") do
+      [table] ->
+        SelectoDBSQLite.InsertAdmission.storage_schema(connection, table, opts)
+
+      ["main", table] ->
+        SelectoDBSQLite.InsertAdmission.storage_schema(connection, table, opts)
+
+      _ ->
+        {:error,
+         Error.new(:validation, "candidate catalog is unavailable",
+           details: %{code: :required_data_rule_pending}
+         )}
+    end
+  end
+
+  defp physical_result_field(schema) do
+    names = schema |> Map.keys() |> MapSet.new(&String.downcase/1)
+
+    Stream.repeatedly(fn ->
+      "selecto_physical_row_" <> Integer.to_string(System.unique_integer([:positive]))
+    end)
+    |> Enum.find(&(not MapSet.member?(names, &1)))
+  end
+
+  defp physical_row_witness(connection, relation, schema, opts) do
+    table = relation |> to_string() |> String.replace_prefix("main.", "")
+
+    with {:ok, %{rows: [[without_rowid]]}} <-
+           execute(
+             connection,
+             "SELECT wr FROM pragma_table_list WHERE schema='main' AND name=? COLLATE NOCASE",
+             [table],
+             opts
+           ) do
+      names = schema |> Map.keys() |> MapSet.new(&String.downcase/1)
+
+      fields =
+        if without_rowid == 1 do
+          schema
+          |> Enum.filter(fn {_name, column} -> column.primary_key end)
+          |> Enum.map(&elem(&1, 0))
+          |> Enum.sort()
+        else
+          [Enum.find(["rowid", "_rowid_", "oid"], &(not MapSet.member?(names, &1)))]
+        end
+
+      if fields != [] and Enum.all?(fields, &is_binary/1),
+        do: {:ok, fields},
+        else:
+          {:error,
+           Error.new(:validation, "physical candidate identity is unavailable",
+             details: %{code: :required_data_rule_pending}
+           )}
+    end
+  end
+
+  defp track_physical_record(request, physical_id, opts) do
+    case Keyword.get(opts, :protected_candidate_tracker) do
+      nil ->
+        :ok
+
+      tracker ->
+        rows = Process.get(tracker, %{})
+
+        key =
+          {request.relation
+           |> to_string()
+           |> String.downcase()
+           |> String.replace_prefix("main.", ""), physical_id}
+
+        case Map.get(rows, key) do
+          nil ->
+            Process.put(tracker, Map.put(rows, key, request))
+            :ok
+
+          ^request ->
+            :ok
+
+          _ ->
+            {:error,
+             Error.new(:validation, "candidate selection reuses a physical row",
+               details: %{code: :ambiguous_candidate_identity}
+             )}
+        end
     end
   end
 
@@ -480,6 +683,9 @@ defmodule SelectoDBSQLite.Adapter do
 
   defp load_prepared_state(connection, %CandidateRequest{} = request, opts),
     do: load_candidate_state(connection, request, opts)
+
+  defp load_prepared_state(connection, %Selecto.Write.RuleCandidateRequest{} = request, opts),
+    do: SelectoDBSQLite.RuleCandidate.project(connection, request, opts)
 
   defp load_prepared_state(_connection, request, _opts),
     do:
