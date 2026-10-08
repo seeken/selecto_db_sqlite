@@ -55,6 +55,92 @@ defmodule SelectoDBSQLite.JsonContainmentTest do
     end
   end
 
+  test "primitive root array exception preserves recursive shape and scalar types", %{
+    connection: connection
+  } do
+    assert Adapter.supports?(connection, :json_contains)
+
+    samples = [
+      {~s(["foo","bar"]), "bar", 1},
+      {~s("bar"), ["bar"], 0},
+      {~s([1,true,null]), true, 1},
+      {~s([1]), true, 0},
+      {~s([true]), 1, 0},
+      {~s([null]), nil, 1},
+      {~s([]), nil, 0},
+      {~s([["bar"]]), "bar", 0},
+      {~s([["bar"]]), ["bar"], 0},
+      {~s({"a":["bar"]}), %{"a" => "bar"}, 0},
+      {~s([{"a":1}]), %{"a" => 1}, 0}
+    ]
+
+    for {source, needle, expected} <- samples do
+      assert contains(connection, source, needle) == expected
+    end
+  end
+
+  test "public JSON filters admit primitives and arrays with native bound execution", %{
+    connection: connection
+  } do
+    assert {:ok, _} =
+             Adapter.execute(
+               connection,
+               "INSERT INTO documents VALUES (1, ?), (2, ?), (3, ?)",
+               [~s(["foo","bar"]), ~s([["bar"]]), ~s({"a":1,"a":2})],
+               []
+             )
+
+    domain = %{
+      name: "Documents",
+      source: %{
+        source_table: "documents",
+        primary_key: :id,
+        fields: [:id, :payload],
+        columns: %{id: %{type: :integer}, payload: %{type: :jsonb}},
+        associations: %{}
+      },
+      schemas: %{},
+      joins: %{}
+    }
+
+    for {needle, expected} <- [
+          {"bar", [[1]]},
+          {["bar"], [[1]]},
+          {%{"a" => 1}, []},
+          {%{"a" => 2}, [[3]]}
+        ] do
+      query =
+        domain
+        |> Selecto.configure(connection, adapter: Adapter)
+        |> Selecto.select(["id"])
+        |> Selecto.filter({"payload", {:json_contains, needle}})
+        |> Selecto.order_by(["id"])
+
+      {sql, params} = Selecto.to_sql(query)
+      assert {:ok, %{rows: ^expected}} = Adapter.execute(connection, sql, params, [])
+      assert needle != "bar" or "bar" in params
+    end
+  end
+
+  test "duplicate object keys use only the last value at each nesting level", %{
+    connection: connection
+  } do
+    for {source, needle, expected} <- [
+          {~s({"a":1,"a":2}), %{"a" => 1}, 0},
+          {~s({"a":1,"a":2}), %{"a" => 2}, 1},
+          {~s({"a":null,"a":true}), %{"a" => nil}, 0},
+          {~s({"a":true,"a":null}), %{"a" => nil}, 1},
+          {~s({"a":{"x":1,"x":2}}), %{"a" => %{"x" => 1}}, 0},
+          {~s({"a":{"x":1,"x":2}}), %{"a" => %{"x" => 2}}, 1},
+          {~s({"a":{"x":1},"a":{"y":2}}), %{"a" => %{"x" => 1}}, 0},
+          {~s({"a":{"x":1},"a":{"y":2}}), %{"a" => %{"y" => 2}}, 1},
+          {~s({"A":1,"a":2,"A":3}), %{"A" => 1}, 0},
+          {~s({"A":1,"a":2,"A":3}), %{"A" => 3, "a" => 2}, 1}
+        ] do
+      assert contains(connection, source, needle) == expected
+    end
+  end
+
   test "bound keys preserve quotes backslashes apostrophes and embedded NUL", %{
     connection: connection
   } do

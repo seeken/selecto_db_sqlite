@@ -12,6 +12,15 @@ defmodule SelectoDBSQLite.RuntimeCapabilities do
       end
 
     json = scalar(connection, "SELECT json_valid('[]')") == 1
+    # Containment selects the last duplicate key by the connected JSON walk's
+    # id ordering. Probe that provider behavior rather than assuming a build.
+    json_contains =
+      json and
+        scalar(
+          connection,
+          "SELECT value FROM json_each('{\"k\":{\"x\":1},\"z\":[1,2],\"k\":2}') WHERE key = 'k' ORDER BY id DESC LIMIT 1"
+        ) == 2
+
     fts5 = scalar(connection, "SELECT 1 FROM pragma_module_list WHERE name = 'fts5'") == 1
     math = scalar(connection, "SELECT floor(1.5)") in [1, 1.0]
     cte = version_at_least?(version, {3, 8, 3}) and "OMIT_CTE" not in options
@@ -34,7 +43,7 @@ defmodule SelectoDBSQLite.RuntimeCapabilities do
         schema_introspection: version_at_least?(version, {3, 26, 0}),
         json: json,
         json_rowset: json,
-        json_contains: json,
+        json_contains: json_contains,
         json_text: json,
         array_rowset: json,
         array_predicates: json,

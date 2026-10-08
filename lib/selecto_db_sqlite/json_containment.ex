@@ -6,7 +6,7 @@ defmodule SelectoDBSQLite.JsonContainment do
   # while bound object keys avoid JSONPath escaping restrictions.
   def render(column, needle) do
     {predicate, _next_alias} =
-      match_value(["json_extract(", column, ", '$')"], ["json_type(", column, ")"], needle, 0, 0)
+      match_root(column, needle)
 
     {:ok,
      [
@@ -24,6 +24,37 @@ defmodule SelectoDBSQLite.JsonContainment do
        Selecto.Error.validation_error(Exception.message(error), %{
          unsupported_feature: :json_contains
        })}
+  end
+
+  # PostgreSQL permits an immediate primitive inside a root array, but does
+  # not apply that exception to nested object members or nested arrays.
+  defp match_root(column, needle) do
+    value = ["json_extract(", column, ", '$')"]
+    type = ["json_type(", column, ")"]
+    {ordinary, next} = match_value(value, type, needle, 0, 0)
+
+    if is_map(needle) or is_list(needle) do
+      {ordinary, next}
+    else
+      alias_name = "selecto_contains_#{next}"
+
+      {member, following} =
+        match_value(alias_name <> ".value", alias_name <> ".type", needle, next + 1, 1)
+
+      {[
+         "CASE WHEN ",
+         type,
+         " = 'array' THEN EXISTS (SELECT 1 FROM json_each(",
+         value,
+         ") AS ",
+         alias_name,
+         " WHERE (",
+         member,
+         ")) ELSE (",
+         ordinary,
+         ") END"
+       ], following}
+    end
   end
 
   defp match_value(_value, _type, _needle, _next_alias, depth) when depth > 32,
@@ -52,7 +83,19 @@ defmodule SelectoDBSQLite.JsonContainment do
            alias_name,
            ".key COLLATE BINARY = ",
            {:param, to_string(key)},
-           " AND (",
+           " AND ",
+           alias_name,
+           ".id = (SELECT max(",
+           alias_name,
+           "_last.id) FROM json_each(",
+           value,
+           ") AS ",
+           alias_name,
+           "_last WHERE ",
+           alias_name,
+           "_last.key COLLATE BINARY = ",
+           alias_name,
+           ".key) AND (",
            child_match,
            "))"
          ], next}

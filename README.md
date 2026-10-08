@@ -112,7 +112,9 @@ value. This adapter does not promise fixed-scale or arbitrary-precision decimal
 storage. Ordinary JSON containment distinguishes booleans from numbers, explicit
 JSON null from a missing member, and text from numeric values. General containment
 accepts recursively nested objects and arrays, with bound object keys including
-punctuation and quoted names (maximum nesting depth 32). Scalar-array any/all
+punctuation and quoted names (maximum nesting depth 32). Duplicate object keys
+use their final value. A root array can contain an immediate primitive; nested
+object/array boundaries remain strict. Scalar-array any/all
 membership accepts scalar needles; nested needles in those finite operations fail
 validation. An empty object matches objects, an empty array-any matches nothing,
 and an empty array-all matches only valid arrays. SQL NULL propagates through
