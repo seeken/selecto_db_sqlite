@@ -264,6 +264,9 @@ defmodule SelectoDBSQLite.Adapter do
   @impl true
   def rollup_sort_fix(_connection), do: false
 
+  @impl true
+  def render_rollup(selecto, opts), do: SelectoDBSQLite.Rollup.render(selecto, opts)
+
   def transaction(conn, fun), do: transaction(conn, fun, [])
 
   @impl true
@@ -284,7 +287,7 @@ defmodule SelectoDBSQLite.Adapter do
   def supports?(:recursive_cte), do: true
   def supports?(:returning), do: true
   def supports?(:text_search), do: true
-  def supports?(:rollup), do: false
+  def supports?(:rollup), do: true
   def supports?(:stream), do: true
   def supports?(:schema_introspection), do: true
   def supports?(:query_analysis), do: true

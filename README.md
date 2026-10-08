@@ -41,6 +41,7 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
 - ✅ Query execution
 - ✅ Joins (INNER, LEFT, CROSS)
 - ✅ CTEs and recursive CTEs
+- ✅ Bounded grouped-prefix rollup, including `GROUPING` masks and empty totals
 - ✅ Window functions (basic windows: SQLite 3.25+; GROUPS/newer RANGE frames: 3.28+)
 - ✅ Typed recursive JSON containment, JSON extraction, and JSON rowsets (JSON support required)
 - ✅ Computed casts, JSON text values, fractional decimal division, and portable buckets
@@ -173,6 +174,20 @@ microsecond extraction, and IANA timezone conversion fail validation. SQLite
 keeps millisecond timestamp precision; decimal division uses floating point.
 Numeric buckets floor negative values without requiring optional math functions.
 Text normalization respects the configured article list and case policy.
+
+SQLite rollup is emulated by a single `UNION ALL` statement over the grouped
+prefixes of one to eight distinct field dimensions. Every branch retains the
+original eligible source rows, required filters, CTEs and joins, including joins
+needed by unselected dimensions. `GROUPING` supports unique subsets of those
+dimensions and distinguishes a real NULL key from a subtotal. Empty input still
+produces one grand total. Up to sixty-four output selectors may be dimensions,
+COUNT/SUM/AVG/MIN/MAX aggregates, aggregate COALESCE, literals or GROUPING.
+Final sorting references selected outputs and preserves SQLite numeric ordering;
+limit and offset apply once to the combined result. Mixed grouping specifications,
+filtered aggregates, window outputs, array operations, separate JSON projections
+and subselect outputs are refused.
+The connected `rollup` capability requires CTE support (SQLite 3.8.3+); it describes
+this adapter lowering, not native SQLite ROLLUP syntax.
 
 ## SQLite Pragmas
 

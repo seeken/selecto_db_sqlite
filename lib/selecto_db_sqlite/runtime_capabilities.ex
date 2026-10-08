@@ -29,6 +29,7 @@ defmodule SelectoDBSQLite.RuntimeCapabilities do
       features: %{
         cte: cte,
         recursive_cte: cte,
+        rollup: cte,
         window_functions: windows,
         returning: returning,
         right_join: version_at_least?(version, {3, 39, 0}),

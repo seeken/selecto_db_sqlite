@@ -41,6 +41,7 @@ defmodule Selecto.DB.SQLite do
   defdelegate format_datetime(sel_iodata, format), to: SelectoDBSQLite.Adapter
   defdelegate rollup_literal_order(index), to: SelectoDBSQLite.Adapter
   defdelegate rollup_sort_fix(connection), to: SelectoDBSQLite.Adapter
+  defdelegate render_rollup(selecto, opts), to: SelectoDBSQLite.Adapter
   defdelegate transaction(connection, fun), to: SelectoDBSQLite.Adapter
   defdelegate transaction(connection, fun, opts), to: SelectoDBSQLite.Adapter
   defdelegate supports?(feature), to: SelectoDBSQLite.Adapter

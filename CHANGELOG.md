@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add bounded native grouped-prefix rollup lowering through the core's optional
+  whole-query adapter callback. Preserve scope, joins, CTE markers, GROUPING masks,
+  empty totals and numeric output types; apply final sorting and pagination once.
+
 - Compare JSON containment numbers exactly from original decimal tokens using a
   bundled Apache-2.0 C extension, including integers beyond SQLite's integer
   range. Preserve final duplicate keys, Unicode/NUL keys and strict nested
