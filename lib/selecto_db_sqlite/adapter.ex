@@ -506,6 +506,7 @@ defmodule SelectoDBSQLite.Adapter do
          {:ok, ownership} <-
            record_ownership_predicate(
              connection,
+             request.relation,
              schema,
              request.ownership,
              request.context,
@@ -538,11 +539,15 @@ defmodule SelectoDBSQLite.Adapter do
          {:ok, child_schema} <-
            relation_storage_schema(connection, request.child_relation, opts),
          :ok <-
-           SelectoDBSQLite.GraphOwnership.require_comparison(
-             parent_schema,
+           SelectoDBSQLite.GraphOwnership.require_physical_edge(
+             connection,
+             request.parent_command.relation,
              request.parent_key,
+             parent_schema,
+             request.child_relation,
+             request.child_key,
              child_schema,
-             request.child_key
+             opts
            ),
          {:ok, child_scope} <- compile_candidate_scope(request.scope_predicate, request.context),
          {:ok, predicate} <-
@@ -577,11 +582,19 @@ defmodule SelectoDBSQLite.Adapter do
     end
   end
 
-  defp record_ownership_predicate(_connection, _child_schema, nil, _context, _opts),
-    do: {:ok, %{text: "", params: []}}
+  defp record_ownership_predicate(
+         _connection,
+         _child_relation,
+         _child_schema,
+         nil,
+         _context,
+         _opts
+       ),
+       do: {:ok, %{text: "", params: []}}
 
   defp record_ownership_predicate(
          connection,
+         child_relation,
          child_schema,
          %{parent_command: %Command{} = parent, parent_key: parent_key, child_key: child_key},
          context,
@@ -591,11 +604,15 @@ defmodule SelectoDBSQLite.Adapter do
          {:ok, parent_schema} <-
            relation_storage_schema(connection, parent.relation, opts),
          :ok <-
-           SelectoDBSQLite.GraphOwnership.require_comparison(
-             parent_schema,
+           SelectoDBSQLite.GraphOwnership.require_physical_edge(
+             connection,
+             parent.relation,
              parent_key,
+             parent_schema,
+             child_relation,
+             child_key,
              child_schema,
-             child_key
+             opts
            ),
          {:ok, predicate} <- WriteCompiler.compile_predicate(parent.predicate, context: context),
          query =
@@ -615,12 +632,19 @@ defmodule SelectoDBSQLite.Adapter do
     end
   end
 
-  defp record_ownership_predicate(_connection, _child_schema, _ownership, _context, _opts),
-    do:
-      {:error,
-       Error.new(:validation, "owned candidate anchor is invalid",
-         details: %{code: :required_data_rule_pending}
-       )}
+  defp record_ownership_predicate(
+         _connection,
+         _child_relation,
+         _child_schema,
+         _ownership,
+         _context,
+         _opts
+       ),
+       do:
+         {:error,
+          Error.new(:validation, "owned candidate anchor is invalid",
+            details: %{code: :required_data_rule_pending}
+          )}
 
   defp compile_candidate_scope(nil, _context), do: {:ok, %{text: "", params: []}}
 

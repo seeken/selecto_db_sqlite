@@ -131,6 +131,105 @@ defmodule SelectoDBSQLite.NativeOwnedKeyTest do
     end
   end
 
+  for {type, constraint} <- [
+        {"TEXT", ""},
+        {"TEXT COLLATE NOCASE", ",PRIMARY KEY(id COLLATE BINARY)"},
+        {"TEXT COLLATE NOCASE", ",UNIQUE(id COLLATE BINARY)"}
+      ] do
+    test "public graph and both rule paths refuse an unproved unique parent: #{type}#{constraint}" do
+      db =
+        database(unquote(type), unquote(type), "A", "B", "A",
+          parent_key_constraint: "",
+          parent_extra: unquote(constraint),
+          child_reference: ""
+        )
+
+      for mode <- [:update, :remove, :empty_sync, :hydrate, :child_rule] do
+        before = snapshot(db)
+        changes = total_changes(db)
+
+        expected_code = refusal_code(mode)
+
+        assert {:error, %Error{details: %{code: ^expected_code}}} =
+                 execute(operation(mode, "A"), db)
+
+        assert snapshot(db) == before
+        if mode not in [:hydrate, :child_rule], do: assert(total_changes(db) == changes)
+      end
+    end
+  end
+
+  for reference <- [
+        "REFERENCES other_parents(id)",
+        "REFERENCES owned_parents(id) REFERENCES other_parents(id)",
+        "REFERENCES other_parents(id) REFERENCES owned_parents(id)"
+      ] do
+    test "public ownership refuses every contradictory FK order: #{reference}" do
+      db =
+        database("TEXT", "TEXT", "A", "B", "A",
+          other_parent: true,
+          child_reference: unquote(reference)
+        )
+
+      for mode <- [:update, :remove, :empty_sync, :hydrate, :child_rule] do
+        before = snapshot(db)
+        changes = total_changes(db)
+
+        expected_code = refusal_code(mode)
+
+        assert {:error, %Error{details: %{code: ^expected_code}}} =
+                 execute(operation(mode, "A"), db)
+
+        assert snapshot(db) == before
+        if mode not in [:hydrate, :child_rule], do: assert(total_changes(db) == changes)
+      end
+
+      sql(db, "BEGIN")
+      sql(db, "UPDATE owned_parents SET reference='pending' WHERE id='B'")
+      pending = snapshot(db)
+
+      assert {:error, %Error{}} = execute(operation(:empty_sync, "A"), db)
+      assert snapshot(db) == pending
+      sql(db, "ROLLBACK")
+      assert parent_references(db) == [["A", "left"], ["B", "right"]]
+    end
+  end
+
+  for reference <- ["", "REFERENCES owned_parents"] do
+    test "public native collection rules retain proven no-FK and implicit-PK ownership: #{reference}" do
+      db = database("TEXT", "VARCHAR", "A", "B", "A", child_reference: unquote(reference))
+      assert {:ok, _} = execute(operation(:hydrate, "A"), db)
+      assert children(db) == [[1, "A", "changed", 1]]
+      assert {:ok, _} = execute(operation(:empty_sync, "A"), db)
+      assert children(db) == []
+      assert parent_references(db) == [["A", "root-write"], ["B", "right"]]
+    end
+  end
+
+  test "prepared preview refuses physical ownership without disclosing the wrong candidate" do
+    db =
+      database("TEXT", "TEXT", "A", "B", "A",
+        other_parent: true,
+        child_reference: "REFERENCES owned_parents(id) REFERENCES other_parents(id)"
+      )
+
+    before = snapshot(db)
+
+    for mode <- [:update, :empty_sync, :hydrate, :child_rule] do
+      expected_code = refusal_code(mode)
+
+      assert {:error, %Error{details: %{code: ^expected_code}}} =
+               SelectoUpdato.preview(operation(mode, "A"), selecto(db), context: %{tenant_id: 7})
+    end
+
+    assert snapshot(db) == before
+  end
+
+  # The public collection provider intentionally wraps unavailable storage
+  # evidence. Individual record providers preserve the adapter's diagnostic.
+  defp refusal_code(:hydrate), do: :candidate_state_unavailable
+  defp refusal_code(_mode), do: :owned_key_comparison_not_evaluable
+
   defp database(parent_decl, child_decl, left, right, owner, opts \\ []) do
     {:ok, db} =
       Adapter.connect(database: ":memory:", temp_store: :memory, foreign_keys: true)
@@ -139,13 +238,21 @@ defmodule SelectoDBSQLite.NativeOwnedKeyTest do
     suffix = if opts[:strict], do: " STRICT", else: ""
     child_key = opts[:child_key] || :owner_id
     extra = opts[:extra_column] || ""
+    parent_constraint = Keyword.get(opts, :parent_key_constraint, "PRIMARY KEY")
+    parent_extra = opts[:parent_extra] || ""
+    reference = Keyword.get(opts, :child_reference, "REFERENCES owned_parents(id)")
+
+    if opts[:other_parent] do
+      sql(db, "CREATE TABLE other_parents(id TEXT PRIMARY KEY)")
+      sql(db, "INSERT INTO other_parents VALUES(?)", [owner])
+    end
 
     sql(db, """
-    CREATE TABLE owned_parents(id #{parent_decl} PRIMARY KEY,tenant_id INTEGER,reference TEXT)#{suffix}
+    CREATE TABLE owned_parents(id #{parent_decl} #{parent_constraint},tenant_id INTEGER,reference TEXT#{parent_extra})#{suffix}
     """)
 
     sql(db, """
-    CREATE TABLE owned_children(id INTEGER PRIMARY KEY,#{child_key} #{child_decl} REFERENCES owned_parents(id),
+    CREATE TABLE owned_children(id INTEGER PRIMARY KEY,#{child_key} #{child_decl} #{reference},
       tenant_id INTEGER,reference TEXT,quantity INTEGER#{extra})#{suffix}
     """)
 

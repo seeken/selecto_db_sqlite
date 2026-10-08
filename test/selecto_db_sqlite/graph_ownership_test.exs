@@ -109,6 +109,165 @@ defmodule SelectoDBSQLite.GraphOwnershipTest do
     assert {:error, %Error{}} = GraphOwnership.require_comparison(schema, :id, schema, "owner_Ä")
   end
 
+  for declaration <- [
+        "id TEXT COLLATE NOCASE",
+        "id TEXT COLLATE NOCASE, reference TEXT, PRIMARY KEY(id COLLATE BINARY)",
+        "id TEXT COLLATE NOCASE, reference TEXT, UNIQUE(id COLLATE BINARY)",
+        "id TEXT COLLATE NOCASE, reference TEXT, PRIMARY KEY(id,reference)"
+      ] do
+    test "graph and both snapshot ports refuse an unproved unique parent: #{declaration}", %{
+      db: db
+    } do
+      declaration = unquote(declaration)
+
+      suffix =
+        if String.contains?(declaration, "reference TEXT"), do: "", else: ", reference TEXT"
+
+      sql(db, "CREATE TABLE parents(#{declaration}#{suffix})")
+
+      sql(
+        db,
+        "CREATE TABLE children(id INTEGER PRIMARY KEY,owner_id TEXT COLLATE NOCASE,reference TEXT)"
+      )
+
+      sql(db, "INSERT INTO parents(id,reference) VALUES('A','left'),('B','right')")
+      sql(db, "INSERT INTO children VALUES(1,'A','original')")
+      refuse_all_ports(db)
+    end
+  end
+
+  for foreign <- [
+        "FOREIGN KEY(owner_id) REFERENCES other_parents(id)",
+        "FOREIGN KEY(owner_id) REFERENCES parents(id), FOREIGN KEY(owner_id) REFERENCES other_parents(id)",
+        "FOREIGN KEY(owner_id,reference) REFERENCES other_parents(id,reference)"
+      ] do
+    test "all relevant FK groups must agree with declared ownership: #{foreign}", %{db: db} do
+      sql(db, "CREATE TABLE parents(id TEXT PRIMARY KEY,reference TEXT)")
+
+      sql(
+        db,
+        "CREATE TABLE other_parents(id TEXT,reference TEXT,PRIMARY KEY(id,reference),UNIQUE(id))"
+      )
+
+      sql(
+        db,
+        "CREATE TABLE children(id INTEGER PRIMARY KEY,owner_id TEXT,reference TEXT,#{unquote(foreign)})"
+      )
+
+      sql(db, "INSERT INTO parents VALUES('A','left'),('B','right')")
+      sql(db, "INSERT INTO other_parents VALUES('A','original')")
+      sql(db, "INSERT INTO children VALUES(1,'A','original')")
+      refuse_all_ports(db)
+    end
+  end
+
+  for reference <- [
+        "",
+        ", FOREIGN KEY(owner_id) REFERENCES parents",
+        ", FOREIGN KEY(owner_id) REFERENCES PARENTS(ID), FOREIGN KEY(owner_id) REFERENCES parents(id)"
+      ] do
+    test "proven no-FK, implicit PK and redundant matching FK edges retain snapshots: #{reference}",
+         %{db: db} do
+      sql(db, "CREATE TABLE parents(id TEXT COLLATE NOCASE PRIMARY KEY,reference TEXT)")
+
+      sql(
+        db,
+        "CREATE TABLE children(id INTEGER PRIMARY KEY,owner_id VARCHAR COLLATE NOCASE,reference TEXT#{unquote(reference)})"
+      )
+
+      sql(db, "INSERT INTO parents VALUES('A','left'),('B','right')")
+      sql(db, "INSERT INTO children VALUES(1,'A','original')")
+
+      assert {:ok, %CandidateState{rows: [%{"id" => 1, "reference" => "original"}]}} =
+               Adapter.load_candidate_state(db, collection_request("a"))
+
+      assert {:ok, %{values: %{"id" => 1, "reference" => "original"}}} =
+               Adapter.load_record_state(db, record_request("a"))
+
+      assert :ok = GraphOwnership.validate(db, graph(:binding, "a"), [])
+      assert :ok = GraphOwnership.validate(db, graph(:empty_sync, "a"), [])
+    end
+  end
+
+  test "a physical unique non-PK comparator can prove the parent", %{db: db} do
+    sql(db, "CREATE TABLE parents(id TEXT COLLATE NOCASE,reference TEXT)")
+    sql(db, "CREATE UNIQUE INDEX parent_identity ON parents(id COLLATE NOCASE)")
+
+    sql(
+      db,
+      "CREATE TABLE children(id INTEGER PRIMARY KEY,owner_id TEXT COLLATE NOCASE,reference TEXT)"
+    )
+
+    sql(db, "INSERT INTO parents VALUES('A','left'),('B','right')")
+    sql(db, "INSERT INTO children VALUES(1,'A','original')")
+    assert :ok = GraphOwnership.validate(db, graph(:binding, "a"), [])
+
+    assert {:ok, %CandidateState{rows: [_]}} =
+             Adapter.load_candidate_state(db, collection_request("a"))
+  end
+
+  for index <- [
+        "CREATE UNIQUE INDEX identity_idx ON parents(id) WHERE id IS NOT NULL",
+        "CREATE UNIQUE INDEX identity_idx ON parents(lower(id))"
+      ] do
+    test "partial and expression unique indexes do not establish owned identity: #{index}", %{
+      db: db
+    } do
+      sql(db, "CREATE TABLE parents(id TEXT,reference TEXT)")
+      sql(db, unquote(index))
+      sql(db, "CREATE TABLE children(id INTEGER PRIMARY KEY,owner_id TEXT,reference TEXT)")
+      sql(db, "INSERT INTO parents VALUES('A','left'),('B','right')")
+      sql(db, "INSERT INTO children VALUES(1,'A','original')")
+      refuse_all_ports(db)
+    end
+  end
+
+  for {definition, suffix, type, left, right} <- [
+        {"id INTEGER PRIMARY KEY,reference TEXT", "", "INTEGER", 1, 2},
+        {"id INTEGER PRIMARY KEY DESC,reference TEXT", "", "INTEGER", 1, 2},
+        {"id TEXT PRIMARY KEY,reference TEXT", " WITHOUT ROWID", "TEXT", "A", "B"}
+      ] do
+    test "physical PK alternatives retain exact graph and snapshot proof: #{definition}", %{
+      db: db
+    } do
+      sql(db, "CREATE TABLE parents(#{unquote(definition)})#{unquote(suffix)}")
+
+      sql(
+        db,
+        "CREATE TABLE children(id INTEGER PRIMARY KEY,owner_id #{unquote(type)} REFERENCES parents(id),reference TEXT)"
+      )
+
+      sql(db, "INSERT INTO parents VALUES(?,'left'),(?,'right')", [unquote(left), unquote(right)])
+      sql(db, "INSERT INTO children VALUES(1,?,'original')", [unquote(left)])
+      assert :ok = GraphOwnership.validate(db, graph(:binding, unquote(left)), [])
+
+      assert {:ok, %CandidateState{rows: [_]}} =
+               Adapter.load_candidate_state(db, collection_request(unquote(left)))
+
+      assert {:ok, %{values: %{"reference" => "original"}}} =
+               Adapter.load_record_state(db, record_request(unquote(left)))
+    end
+  end
+
+  defp refuse_all_ports(db) do
+    before = {sql(db, "SELECT * FROM parents"), sql(db, "SELECT * FROM children")}
+    changes = sql(db, "SELECT total_changes()")
+
+    for kind <- [:binding, :empty_sync] do
+      assert {:error, %Error{details: %{code: :owned_key_comparison_not_evaluable}}} =
+               Adapter.execute_write_unsafe(db, graph(kind, "A"))
+    end
+
+    assert {:error, %Error{details: %{code: :owned_key_comparison_not_evaluable}}} =
+             Adapter.load_candidate_state(db, collection_request("A"))
+
+    assert {:error, %Error{details: %{code: :owned_key_comparison_not_evaluable}}} =
+             Adapter.load_record_state(db, record_request("A"))
+
+    assert before == {sql(db, "SELECT * FROM parents"), sql(db, "SELECT * FROM children")}
+    assert changes == sql(db, "SELECT total_changes()")
+  end
+
   defp tables(db, parent_type, child_type, left, right, owner) do
     sql(db, "CREATE TABLE parents(id #{parent_type} PRIMARY KEY,reference TEXT)")
 

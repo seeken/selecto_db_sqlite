@@ -460,10 +460,24 @@ compare with the parent's affinity and collation, while child predicates compare
 with the child's. This adapter admits those predicates only when both columns
 have the same SQLite affinity and built-in collation (`BINARY`, `NOCASE`, or
 `RTRIM`). Different type spellings with the same affinity, such as `TEXT` and
-`VARCHAR`, are supported. A mismatch, `ANY` storage, or an unavailable ordinary
+`VARCHAR`, are supported. The parent key must also have a single-column,
+nonpartial physical unique index with the same comparator, or be an actual
+`INTEGER PRIMARY KEY` rowid alias. A composite, expression or differently
+collated index does not establish that identity. Domain-declared edges without
+a physical foreign key remain supported when that proof succeeds. Every
+foreign-key group involving the child ownership column, when present, must
+match the declared single-column parent edge; contradictory or composite
+foreign keys refuse. An omitted referenced field resolves only a sole physical
+parent primary key.
+
+A mismatch, unproved uniqueness, `ANY` storage, or an unavailable ordinary
 main-schema catalog refuses with `owned_key_comparison_not_evaluable`; it never
 uses a child's broader comparison to claim ownership of another parent's row.
 The check also covers empty delete-missing sets and prepared previews, inside
 the original connection's write transaction. Applications using mismatched
 physical ownership columns must align their schema before using this finite
 owned-graph port.
+Both protected snapshot loaders use the same proof before exposing children.
+Updato's collection provider preserves its existing generic
+`candidate_state_unavailable` diagnostic when physical evidence is unavailable;
+the individual record provider retains the adapter error.

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Require a proven physical unique parent comparator and agreement of every
+  relevant child foreign-key group before graph bindings, empty/nonempty sync,
+  collection hydration and individual child snapshots. Preserve safe no-FK
+  edges, implicit sole-primary-key references and caller transactions. Refuse
+  contradictory/composite foreign keys and partial/expression/differently
+  collated unique indexes before business DML or child disclosure.
+
 - Check generated graph edges and protected child snapshots against the physical
   parent and child affinities and built-in collations before hydration or graph
   DML. Refuse unprovable ownership, including mismatched collations, affinities
