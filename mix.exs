@@ -10,6 +10,7 @@ defmodule Selecto.DB.SQLite.MixProject do
       version: @version,
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
+      lockfile: System.get_env("MIX_LOCKFILE", "mix.lock"),
       compilers: [:elixir_make] ++ Mix.compilers(),
       deps: deps(),
       description: description(),

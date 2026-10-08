@@ -448,9 +448,14 @@ load at most 1,000 children. Stored normalizers retain field grants and write-on
 guards; repeated selectors for one physical row refuse stale snapshots. Public
 prepared previews use the same native projection and preserve host transactions.
 
-Connected previews and ordinary/final prepared commands check incoming
-main-schema foreign keys before
-the first business statement. An update or upsert that assigns a referenced
+Connected previews and ordinary/final prepared commands first prove every
+mutating target is an ordinary main table with no generated or hidden columns,
+main/TEMP target triggers, or TEMP table/view shadow. This applies to insert,
+update, upsert and delete, even without Rules, including every later batch or
+graph target and delete-missing cleanup before the first business statement.
+Read-only queries do not acquire mutation rights. Logical preview validation
+retains its diagnostic precedence. The physical proof also checks incoming
+main-schema foreign keys. An update or upsert that assigns a referenced
 key refuses with `native_write_effects_not_evaluable` when SQLite would apply
 `ON UPDATE CASCADE`, `SET NULL`, or `SET DEFAULT` outside the approved commands.
 This includes a normalizer changing a field that was not originally submitted.
@@ -465,8 +470,8 @@ children. The entire batch or graph, including delete-missing cleanup, is
 checked before its first mutation. An unmaterialized cleanup requires global
 absence; sibling writes to an incoming child table and main/TEMP triggers on
 plan targets refuse because they can invalidate that proof. TEMP target shadows
-also refuse. These are finite native admission boundaries; other trigger effects
-and attached-schema effects are not established by this check. Public native
+also refuse. These are finite native admission boundaries; attached-schema
+effects are not established by this check. Public native
 controls are available in `scripts/sqlite_incoming_fk_regression.exs` and
 `scripts/sqlite_delete_effects_regression.exs` with the selected Updato dependency.
 

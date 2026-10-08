@@ -1,7 +1,7 @@
 defmodule SelectoDBSQLite.PreparedWriteSafety do
   @moduledoc false
   alias Selecto.Write.{Batch, Command, Error, Graph}
-  alias SelectoDBSQLite.{Adapter, WriteCompiler}
+  alias SelectoDBSQLite.{Adapter, InsertAdmission, WriteCompiler}
 
   @max_tables 1024
   @max_foreign_keys 4096
@@ -11,6 +11,43 @@ defmodule SelectoDBSQLite.PreparedWriteSafety do
   def validate(connection, write, opts) do
     commands = commands(write)
 
+    # A trigger or generated column can change a referenced key which is absent
+    # from the submitted assignments. Establish the whole physical mutation
+    # target first, even without rules or a directly assigned incoming FK key.
+    # SELECT anchors merely bind existing rows and do not acquire mutation rights.
+    with :ok <- ordinary_targets(connection, commands, opts) do
+      validate_incoming(connection, commands, opts)
+    end
+  rescue
+    _ -> pending()
+  end
+
+  defp ordinary_targets(connection, commands, opts) do
+    commands
+    |> Enum.filter(&(&1.operation in [:insert, :update, :upsert, :delete]))
+    |> Enum.uniq_by(&ascii_fold(&1.relation))
+    |> Enum.reduce_while(:ok, fn command, :ok ->
+      with {:ok, table} <- main_table(command.relation),
+           {:ok, _schema} <- InsertAdmission.storage_schema(connection, table, opts) do
+        {:cont, :ok}
+      else
+        {:error, %Error{} = error} ->
+          # Preserve the existing typed query-admission diagnostic for guarded
+          # inserts while applying the same physical proof to ordinary writes.
+          refusal =
+            if Map.has_key?(command.metadata, :insert_admission),
+              do: {:error, error},
+              else: pending()
+
+          {:halt, refusal}
+
+        _ ->
+          {:halt, pending()}
+      end
+    end)
+  end
+
+  defp validate_incoming(connection, commands, opts) do
     mutations =
       Enum.filter(
         commands,
@@ -55,8 +92,6 @@ defmodule SelectoDBSQLite.PreparedWriteSafety do
         _ -> pending()
       end
     end
-  rescue
-    _ -> pending()
   end
 
   defp commands(%Command{} = command), do: [command]

@@ -56,7 +56,9 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
   end
 
   test "passes portable preview conformance", %{selecto: selecto} do
-    assert {:ok, report} = AdapterConformance.check(selecto)
+    assert {:ok, report} =
+             AdapterConformance.check(selecto, relation: :items, context: %{tenant_id: 7})
+
     assert report.capabilities.dialect == :sqlite
   end
 

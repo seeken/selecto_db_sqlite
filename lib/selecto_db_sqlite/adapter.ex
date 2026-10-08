@@ -331,18 +331,21 @@ defmodule SelectoDBSQLite.Adapter do
   def preview_write(connection, write, opts \\ [])
 
   def preview_write(connection, %Command{} = command, opts) do
-    with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(connection, command, opts),
-         do: WriteCompiler.preview(command, opts)
+    with {:ok, preview} <- WriteCompiler.preview(command, opts),
+         :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(connection, command, opts),
+         do: {:ok, preview}
   end
 
   def preview_write(connection, %Batch{} = batch, opts) do
-    with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(connection, batch, opts),
-         do: WriteCompiler.preview(batch, opts)
+    with {:ok, preview} <- WriteCompiler.preview(batch, opts),
+         :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(connection, batch, opts),
+         do: {:ok, preview}
   end
 
   def preview_write(connection, %Graph{} = graph, opts) do
-    with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(connection, graph, opts),
-         do: preview_graph(graph, opts)
+    with {:ok, preview} <- preview_graph(graph, opts),
+         :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(connection, graph, opts),
+         do: {:ok, preview}
   end
 
   def preview_write(_connection, write, _opts), do: invalid_write_input(write)
