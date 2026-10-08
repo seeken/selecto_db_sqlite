@@ -481,6 +481,17 @@ storage types, and unresolved generated values or required external evidence.
 Upsert and delete rules requiring a final candidate remain explicit refusals.
 All SQLite tests use in-memory databases.
 
+The ordinary-source proof also rejects physical schema `ON CONFLICT REPLACE`
+clauses. Even a plain INSERT could otherwise delete a conflicting row and invoke
+unrelated incoming DELETE actions, or substitute a NOT NULL default outside the
+captured candidate. This refusal covers every mutating target before any batch or
+graph prefix executes, including connected prepared preview. Quoted strings,
+quoted identifiers and comments containing those words are accepted as data;
+comments separating a real conflict clause do not conceal it. The shared
+physical catalog proof also applies to owned-schema comparison and candidate
+snapshot loading. Ordinary SELECT queries remain available. This is a conservative
+storage refusal, not emulation of arbitrary replacement effects.
+
 Generated-key graphs and protected child snapshots validate the physical parent
 and child ownership columns before hydration or graph DML. SQLite foreign keys
 compare with the parent's affinity and collation, while child predicates compare

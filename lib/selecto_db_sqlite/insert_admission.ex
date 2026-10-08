@@ -58,6 +58,7 @@ defmodule SelectoDBSQLite.InsertAdmission do
              opts
            ),
          true <- is_binary(ddl) and Regex.match?(~r/\ACREATE\s+TABLE\b/i, ddl),
+         false <- replace_conflict?(ddl),
          {:ok, %{rows: [["table", without_rowid]]}} <-
            Adapter.execute(
              connection,
@@ -288,14 +289,30 @@ defmodule SelectoDBSQLite.InsertAdmission do
   # quoted names separately, then inspect only each declaration's outer level.
   # This avoids treating COLLATE inside defaults or CHECK expressions as the
   # column collation, and refuses unrecognized custom collations conservatively.
+  # A schema conflict policy applies even to a plain INSERT, UPDATE or upsert.
+  # REPLACE can delete a conflicting row (including unrelated FK descendants),
+  # or replace submitted NOT NULL values with defaults outside the proved row.
+  # Quoted tokens remain distinct; comments may separate real SQL keywords.
+  defp replace_conflict?(ddl) do
+    ddl
+    |> ddl_tokens()
+    |> Enum.chunk_every(3, 1, :discard)
+    |> Enum.any?(fn tokens ->
+      Enum.map(tokens, &ascii_upcase/1) == ["ON", "CONFLICT", "REPLACE"]
+    end)
+  end
+
+  defp ddl_tokens(ddl) do
+    Regex.scan(
+      ~r/--[^\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|[A-Za-z_\x{80}-\x{10FFFF}][A-Za-z0-9_$\x{80}-\x{10FFFF}]*|\S/u,
+      ddl
+    )
+    |> List.flatten()
+    |> Enum.reject(&String.starts_with?(&1, ["--", "/*"]))
+  end
+
   defp column_collations(ddl) do
-    tokens =
-      Regex.scan(
-        ~r/--[^\n]*|\/\*[\s\S]*?\*\/|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|[A-Za-z_\x{80}-\x{10FFFF}][A-Za-z0-9_$\x{80}-\x{10FFFF}]*|\S/u,
-        ddl
-      )
-      |> List.flatten()
-      |> Enum.reject(&String.starts_with?(&1, ["--", "/*"]))
+    tokens = ddl_tokens(ddl)
 
     with [_open | body] <- Enum.drop_while(tokens, &(&1 != "(")),
          {:ok, declarations} <- declarations(body, 0, [], []) do
