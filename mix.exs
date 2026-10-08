@@ -10,6 +10,7 @@ defmodule Selecto.DB.SQLite.MixProject do
       version: @version,
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
+      compilers: [:elixir_make] ++ Mix.compilers(),
       deps: deps(),
       description: description(),
       package: package(),
@@ -29,6 +30,7 @@ defmodule Selecto.DB.SQLite.MixProject do
       selecto_dep(),
       {:exqlite, "~> 0.13"},
       {:jason, "~> 1.4"},
+      {:elixir_make, "~> 0.10", runtime: false},
       {:ex_doc, "~> 0.27", only: :dev, runtime: false}
     ]
   end
@@ -63,6 +65,7 @@ defmodule Selecto.DB.SQLite.MixProject do
     [
       name: "selecto_db_sqlite",
       licenses: ["Apache-2.0"],
+      files: ["lib", "c_src", "Makefile", "mix.exs", "README.md", "LICENSE", "CHANGELOG.md"],
       links: %{
         "GitHub" => @source_url,
         "Selecto" => "https://github.com/selecto/selecto"

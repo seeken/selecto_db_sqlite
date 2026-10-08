@@ -12,14 +12,10 @@ defmodule SelectoDBSQLite.RuntimeCapabilities do
       end
 
     json = scalar(connection, "SELECT json_valid('[]')") == 1
-    # Containment selects the last duplicate key by the connected JSON walk's
-    # id ordering. Probe that provider behavior rather than assuming a build.
-    json_contains =
-      json and
-        scalar(
-          connection,
-          "SELECT value FROM json_each('{\"k\":{\"x\":1},\"z\":[1,2],\"k\":2}') WHERE key = 'k' ORDER BY id DESC LIMIT 1"
-        ) == 2
+    # A JSON1 walk coerces original numbers to REAL. Claim containment only
+    # when the connected exact comparator proves numeric, duplicate-key and
+    # primitive-root semantics independently of the provider's JSON1 build.
+    json_contains = json and SelectoDBSQLite.NativeJson.available?(connection)
 
     fts5 = scalar(connection, "SELECT 1 FROM pragma_module_list WHERE name = 'fts5'") == 1
     math = scalar(connection, "SELECT floor(1.5)") in [1, 1.0]

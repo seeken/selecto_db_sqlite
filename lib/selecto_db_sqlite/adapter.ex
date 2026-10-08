@@ -123,6 +123,7 @@ defmodule SelectoDBSQLite.Adapter do
   defp sanitized_read_error(message) do
     category =
       cond do
+        String.starts_with?(message, "selecto_json_contains:") -> :json_containment_resource_limit
         category = sqlite_constraint_category(message) -> category
         String.starts_with?(message, "CHECK constraint failed") -> :check_violation
         true -> :database_error
@@ -135,7 +136,13 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   @impl true
-  def connect(connection) when is_reference(connection), do: {:ok, connection}
+  def connect(connection) when is_reference(connection) do
+    with :ok <- ensure_exqlite(),
+         :ok <- SelectoDBSQLite.NativeJson.install(connection) do
+      {:ok, connection}
+    end
+  end
+
   def connect(opts) when is_map(opts), do: connect(Map.to_list(opts))
 
   def connect(opts) when is_list(opts) do
@@ -1261,7 +1268,8 @@ defmodule SelectoDBSQLite.Adapter do
 
   defp configure_connection(connection, settings) do
     with :ok <- configure_pragmas(connection, settings.pragmas),
-         :ok <- load_extensions(connection, settings.extensions) do
+         :ok <- load_extensions(connection, settings.extensions),
+         :ok <- SelectoDBSQLite.NativeJson.install(connection) do
       :ok
     end
   end

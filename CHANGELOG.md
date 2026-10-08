@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Compare JSON containment numbers exactly from original decimal tokens using a
+  bundled Apache-2.0 C extension, including integers beyond SQLite's integer
+  range. Preserve final duplicate keys, Unicode/NUL keys and strict nested
+  shapes; bound parsing and comparison work with explicit resource refusals.
+  Package native source and build it with `elixir_make`, install it on newly
+  opened or adopted Exqlite connections, and disable loading after setup.
 - Correct ordinary JSON object/scalar-array predicates with type-aware null,
   boolean, numeric and text comparisons, object/array guards, empty-object and
   empty-any/all semantics, and recursive object/array containment with bound keys.

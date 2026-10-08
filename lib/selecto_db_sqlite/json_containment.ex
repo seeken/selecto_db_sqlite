@@ -1,150 +1,114 @@
 defmodule SelectoDBSQLite.JsonContainment do
   @moduledoc false
 
-  # json_each exposes the JSON type separately from its SQL scalar value.
-  # Recursing over that pair preserves null/missing and boolean/number identity,
-  # while bound object keys avoid JSONPath escaping restrictions.
-  def render(column, needle) do
-    {predicate, _next_alias} =
-      match_root(column, needle)
+  @max_bytes 1_048_576
+  @max_nodes 32_768
 
-    {:ok,
-     [
-       "CASE WHEN ",
-       column,
-       " IS NULL THEN NULL WHEN json_valid(",
-       column,
-       ") THEN (",
-       predicate,
-       ") ELSE 0 END"
-     ]}
+  # Bind one canonical JSON document; the native comparator retains source
+  # numeric tokens instead of passing them through SQLite REAL values.
+  def render(column, needle) do
+    {value, _budget} = validate(needle, 0, {0, 0})
+    encoded = Jason.encode!(value)
+
+    if byte_size(encoded) > @max_bytes,
+      do:
+        raise(
+          ArgumentError,
+          "SQLite JSON containment exceeds the maximum input size of 1048576 bytes"
+        )
+
+    {:ok, ["selecto_json_contains_exact_v1(", column, ", ", {:param, encoded}, ")"]}
   rescue
-    error in ArgumentError ->
+    error in [ArgumentError, Jason.EncodeError] ->
       {:error,
        Selecto.Error.validation_error(Exception.message(error), %{
          unsupported_feature: :json_contains
        })}
   end
 
-  # PostgreSQL permits an immediate primitive inside a root array, but does
-  # not apply that exception to nested object members or nested arrays.
-  defp match_root(column, needle) do
-    value = ["json_extract(", column, ", '$')"]
-    type = ["json_type(", column, ")"]
-    {ordinary, next} = match_value(value, type, needle, 0, 0)
-
-    if is_map(needle) or is_list(needle) do
-      {ordinary, next}
-    else
-      alias_name = "selecto_contains_#{next}"
-
-      {member, following} =
-        match_value(alias_name <> ".value", alias_name <> ".type", needle, next + 1, 1)
-
-      {[
-         "CASE WHEN ",
-         type,
-         " = 'array' THEN EXISTS (SELECT 1 FROM json_each(",
-         value,
-         ") AS ",
-         alias_name,
-         " WHERE (",
-         member,
-         ")) ELSE (",
-         ordinary,
-         ") END"
-       ], following}
-    end
-  end
-
-  defp match_value(_value, _type, _needle, _next_alias, depth) when depth > 32,
+  defp validate(_value, depth, _nodes) when depth > 32,
     do: raise(ArgumentError, "SQLite JSON containment exceeds the maximum nesting depth of 32")
 
-  defp match_value(value, type, needle, next_alias, depth)
-       when is_map(needle) and not is_struct(needle) do
-    {members, next_alias} =
-      needle
-      |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
-      |> Enum.map_reduce(next_alias, fn {key, child}, index ->
-        unless is_binary(key) or is_atom(key),
-          do: raise(ArgumentError, "JSON object keys must be strings")
+  defp validate(_value, _depth, {nodes, _bytes}) when nodes >= @max_nodes,
+    do: raise(ArgumentError, "SQLite JSON containment exceeds the maximum node count of 32768")
 
-        alias_name = "selecto_contains_#{index}"
+  defp validate(value, depth, budget) when is_map(value) and not is_struct(value) do
+    Enum.reduce(value, {%{}, spend(budget, 2, 1)}, fn {key, child}, {object, current} ->
+      unless is_binary(key) or is_atom(key),
+        do: raise(ArgumentError, "JSON object keys must be strings or atoms")
 
-        {child_match, next} =
-          match_value(alias_name <> ".value", alias_name <> ".type", child, index + 1, depth + 1)
+      key = to_string(key)
 
-        {[
-           "EXISTS (SELECT 1 FROM json_each(",
-           value,
-           ") AS ",
-           alias_name,
-           " WHERE ",
-           alias_name,
-           ".key COLLATE BINARY = ",
-           {:param, to_string(key)},
-           " AND ",
-           alias_name,
-           ".id = (SELECT max(",
-           alias_name,
-           "_last.id) FROM json_each(",
-           value,
-           ") AS ",
-           alias_name,
-           "_last WHERE ",
-           alias_name,
-           "_last.key COLLATE BINARY = ",
-           alias_name,
-           ".key) AND (",
-           child_match,
-           "))"
-         ], next}
-      end)
+      if byte_size(key) > @max_bytes,
+        do:
+          raise(
+            ArgumentError,
+            "SQLite JSON containment exceeds the maximum input size of 1048576 bytes"
+          )
 
-    {["CASE WHEN ", type, " = 'object' THEN (", conjunction(members), ") ELSE 0 END"], next_alias}
+      unless String.valid?(key), do: raise(ArgumentError, "JSON object keys must be valid UTF-8")
+
+      if Map.has_key?(object, key),
+        do: raise(ArgumentError, "JSON object keys must remain unique after string conversion")
+
+      separator = if map_size(object) == 0, do: 1, else: 2
+      current = spend(current, byte_size(Jason.encode!(key)) + separator, 0)
+      {child, next} = validate(child, depth + 1, current)
+      {Map.put(object, key, child), next}
+    end)
   end
 
-  defp match_value(value, type, needle, next_alias, depth) when is_list(needle) do
-    {members, next_alias} =
-      Enum.map_reduce(needle, next_alias, fn child, index ->
-        alias_name = "selecto_contains_#{index}"
+  defp validate(value, depth, budget) when is_list(value),
+    do: validate_list(value, depth, spend(budget, 2, 1), [])
 
-        {child_match, next} =
-          match_value(alias_name <> ".value", alias_name <> ".type", child, index + 1, depth + 1)
+  defp validate(value, _depth, budget) when is_binary(value) do
+    if byte_size(value) > @max_bytes,
+      do:
+        raise(
+          ArgumentError,
+          "SQLite JSON containment exceeds the maximum input size of 1048576 bytes"
+        )
 
-        {[
-           "EXISTS (SELECT 1 FROM json_each(",
-           value,
-           ") AS ",
-           alias_name,
-           " WHERE (",
-           child_match,
-           "))"
-         ], next}
-      end)
-
-    {["CASE WHEN ", type, " = 'array' THEN (", conjunction(members), ") ELSE 0 END"], next_alias}
+    unless String.valid?(value), do: raise(ArgumentError, "JSON strings must be valid UTF-8")
+    {value, spend(budget, byte_size(Jason.encode!(value)), 1)}
   end
 
-  defp match_value(_value, type, nil, next_alias, _depth),
-    do: {[type, " = 'null'"], next_alias}
+  defp validate(value, _depth, budget)
+       when is_integer(value) or is_float(value) or is_boolean(value) or is_nil(value) do
+    if is_integer(value) and :erlang.external_size(value) > @max_bytes,
+      do:
+        raise(
+          ArgumentError,
+          "SQLite JSON containment exceeds the maximum input size of 1048576 bytes"
+        )
 
-  defp match_value(_value, type, true, next_alias, _depth),
-    do: {[type, " = 'true'"], next_alias}
+    {value, spend(budget, byte_size(Jason.encode!(value)), 1)}
+  end
 
-  defp match_value(_value, type, false, next_alias, _depth),
-    do: {[type, " = 'false'"], next_alias}
+  defp validate(_value, _depth, _nodes),
+    do: raise(ArgumentError, "SQLite JSON containment requires a plain JSON value")
 
-  defp match_value(value, type, needle, next_alias, _depth) when is_binary(needle),
-    do: {[type, " = 'text' AND ", value, " COLLATE BINARY = ", {:param, needle}], next_alias}
+  defp validate_list([], _depth, nodes, values), do: {Enum.reverse(values), nodes}
 
-  defp match_value(value, type, needle, next_alias, _depth)
-       when is_integer(needle) or is_float(needle),
-       do: {[type, " IN ('integer', 'real') AND ", value, " = ", {:param, needle}], next_alias}
+  defp validate_list([value | tail], depth, nodes, values) do
+    nodes = if values == [], do: nodes, else: spend(nodes, 1, 0)
+    {value, next} = validate(value, depth + 1, nodes)
+    validate_list(tail, depth, next, [value | values])
+  end
 
-  defp match_value(_value, _type, _needle, _next_alias, _depth),
-    do: raise(ArgumentError, "SQLite JSON containment requires a JSON value")
+  defp validate_list(_improper, _depth, _nodes, _values),
+    do: raise(ArgumentError, "SQLite JSON containment requires a proper JSON array")
 
-  defp conjunction([]), do: "1"
-  defp conjunction(members), do: Enum.intersperse(members, " AND ")
+  # Account for the encoded document before encoding it as a whole. Repeated
+  # individually valid strings cannot force an unbounded aggregate allocation.
+  defp spend({nodes, bytes}, additional_bytes, additional_nodes) do
+    if bytes + additional_bytes > @max_bytes,
+      do:
+        raise(
+          ArgumentError,
+          "SQLite JSON containment exceeds the maximum input size of 1048576 bytes"
+        )
+
+    {nodes + additional_nodes, bytes + additional_bytes}
+  end
 end

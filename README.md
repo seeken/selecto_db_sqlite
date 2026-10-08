@@ -120,6 +120,33 @@ validation. An empty object matches objects, an empty array-any matches nothing,
 and an empty array-all matches only valid arrays. SQL NULL propagates through
 JSON predicates.
 
+General containment uses the adapter's bundled native SQLite extension and
+compares original numeric tokens as exact decimals, including integers beyond
+SQLite's signed 64-bit range. It never uses SQLite REAL conversion for containment.
+The extension is independently authored under Apache-2.0 and built from packaged
+C source by `elixir_make`; building the adapter requires `make` and a C11 compiler.
+The SQLite headers come from the existing Exqlite dependency. No system SQLite
+library is linked into the extension. Connection setup loads only the bundled
+library automatically and disables extension loading afterward. Adopting an
+Exqlite reference with `Adapter.connect/1` installs and probes the same function;
+a provider that cannot install it returns `:sqlite_exact_json_extension_unavailable`.
+`json_contains` is advertised only after live exact-number and shape probes pass.
+
+Containment accepts canonical JSON text, including escaped NUL and Unicode
+object keys. Binary SQLite JSONB is not a supported storage representation.
+Malformed source text returns false; SQL NULL remains NULL. Native calls bound
+each source/needle to 1 MiB, nesting to 32, combined values to 32,768 nodes,
+allocated parser memory to 16 MiB, and parser/comparison work to 8,388,608 units.
+Exceeding a native limit raises an explicit SQLite error, normalized to the safe
+`:json_containment_resource_limit` category. Invalid or oversized caller needles
+fail query validation. Plain maps accept string or atom keys, with collisions
+after conversion to strings refused; arbitrary structs are refused.
+
+`sh scripts/verify_native_json.sh` runs the independent parser/comparator consumer
+with AddressSanitizer and UndefinedBehaviorSanitizer using an in-memory SQLite
+database. `SQLITE_HEADERS` and `SQLITE_LIB_DIR` may select the test consumer's
+headers and a SQLite library with extension loading enabled.
+
 Array values use JSON storage. Constructors, one-dimensional length/cardinality,
 typed contains/overlap/contained/equality predicates, and native `json_each`
 rowsets are supported. JSON array aggregates retain nulls and support DISTINCT

@@ -118,7 +118,7 @@ defmodule SelectoDBSQLite.JsonContainmentTest do
 
       {sql, params} = Selecto.to_sql(query)
       assert {:ok, %{rows: ^expected}} = Adapter.execute(connection, sql, params, [])
-      assert needle != "bar" or "bar" in params
+      assert Jason.encode!(needle) in params
     end
   end
 
@@ -162,6 +162,131 @@ defmodule SelectoDBSQLite.JsonContainmentTest do
     assert contains(connection, "invalid", %{}) == 0
     assert contains(connection, Jason.encode!(nil), nil) == 1
     assert contains(connection, Jason.encode!(false), nil) == 0
+  end
+
+  test "numeric containment retains exact decimal tokens beyond REAL and integer ranges", %{
+    connection: connection
+  } do
+    for {source, needle, expected} <- [
+          {~s({"n":1.0000000000000000001}), %{"n" => 1}, 0},
+          {~s({"n":9007199254740993.0}), %{"n" => 9_007_199_254_740_993}, 1},
+          {~s({"n":9007199254740992.0}), %{"n" => 9_007_199_254_740_993}, 0},
+          {~s({"n":18446744073709551616.0}), %{"n" => 18_446_744_073_709_551_616}, 1},
+          {~s({"n":18446744073709551617.0}), %{"n" => 18_446_744_073_709_551_616}, 0},
+          {~s(-0.000e999999999999999999999999), 0, 1},
+          {~s(1e-999999999999999999999999), 0, 0},
+          {~s(1000000000000000000000000e-24), 1, 1},
+          {~s(12300), 12_300, 1},
+          {~s(-1.2300e2), -123, 1},
+          {~s([9007199254740993.0]), 9_007_199_254_740_993, 1}
+        ] do
+      assert contains(connection, source, needle) == expected
+    end
+
+    assert {:ok, _} =
+             Adapter.execute(connection, "DELETE FROM documents", [], [])
+
+    assert {:ok, _} =
+             Adapter.execute(
+               connection,
+               "INSERT INTO documents VALUES (1, ?), (2, ?)",
+               [~s({"n":1.0000000000000000001}), ~s({"n":9007199254740993.0})],
+               []
+             )
+
+    domain = %{
+      name: "Documents",
+      source: %{
+        source_table: "documents",
+        primary_key: :id,
+        fields: [:id, :payload],
+        columns: %{id: %{type: :integer}, payload: %{type: :jsonb}},
+        associations: %{}
+      },
+      schemas: %{},
+      joins: %{}
+    }
+
+    for {needle, expected} <- [{%{"n" => 1}, []}, {%{"n" => 9_007_199_254_740_993}, [[2]]}] do
+      query =
+        domain
+        |> Selecto.configure(connection, adapter: Adapter)
+        |> Selecto.select(["id"])
+        |> Selecto.filter({"payload", {:json_contains, needle}})
+
+      assert {:ok, {^expected, _, _}} = Selecto.execute(query)
+      {sql, params} = Selecto.to_sql(query)
+      assert sql =~ "selecto_json_contains_exact_v1"
+      assert Jason.encode!(needle) in params
+    end
+  end
+
+  test "adopts raw connections and disables extension loading on repeated adoption" do
+    {:ok, raw} = Exqlite.Sqlite3.open(":memory:")
+    on_exit(fn -> Adapter.disconnect(raw) end)
+    refute Adapter.supports?(raw, :json_contains)
+    assert {:ok, ^raw} = Adapter.connect(raw)
+    assert Adapter.supports?(raw, :json_contains)
+    assert :ok = Exqlite.Sqlite3.enable_load_extension(raw, true)
+    assert {:ok, ^raw} = Adapter.connect(raw)
+
+    assert {:error, reason} = Adapter.execute(raw, "SELECT load_extension(?)", ["missing"], [])
+    assert inspect(reason) =~ "not authorized"
+
+    assert {:ok, %{rows: [[0]]}} =
+             Adapter.execute(
+               raw,
+               "SELECT selecto_json_contains_exact_v1(?, ?)",
+               ["1.0000000000000000001", "1"],
+               []
+             )
+  end
+
+  test "native depth input nodes and comparison limits refuse explicitly", %{
+    connection: connection
+  } do
+    values = Enum.to_list(0..2999)
+    huge_array = Jason.encode!(Enum.to_list(0..32_766))
+    nested = String.duplicate("[", 33) <> "0" <> String.duplicate("]", 33)
+
+    for {source, needle} <- [
+          {"0" <> String.duplicate(" ", 1_048_576), "0"},
+          {nested, "[]"},
+          {huge_array, "[]"},
+          {Jason.encode!(values), Jason.encode!(Enum.reverse(values))}
+        ] do
+      assert {:error, reason} =
+               Adapter.execute(
+                 connection,
+                 "SELECT selecto_json_contains_exact_v1(?, ?)",
+                 [source, needle],
+                 []
+               )
+
+      assert %Selecto.Error{details: %{category: :json_containment_resource_limit}} =
+               Adapter.normalize_error(reason)
+    end
+  end
+
+  test "renderer validates plain bounded JSON including UTF-8 and normalized key uniqueness" do
+    for needle <- [
+          %{"a" => 2, a: 1},
+          %{1 => 2},
+          ~D[2026-10-08],
+          [1 | 2],
+          <<255>>,
+          %{<<255>> => 1},
+          List.duplicate(0, 32_768),
+          String.duplicate("x", 1_048_576),
+          List.duplicate(String.duplicate("x", 65_536), 17),
+          Enum.reduce(1..33, 0, fn _, value -> [value] end)
+        ] do
+      assert {:error, %Selecto.Error{details: %{unsupported_feature: :json_contains}}} =
+               JsonContainment.render("payload", needle)
+    end
+
+    assert {:ok, _} = JsonContainment.render("payload", %{valid: [true, nil, 1, "x"]})
+    assert {:ok, _} = JsonContainment.render("payload", String.duplicate("x", 1_048_574))
   end
 
   defp contains(connection, source, needle) do
