@@ -3,7 +3,7 @@ defmodule SelectoDBSQLite.QueryGuardTest do
   alias SelectoDBSQLite.{Adapter, QueryGuard}
 
   setup do
-    {:ok, conn} = Adapter.connect(database: ":memory:")
+    {:ok, conn} = Adapter.connect(database: ":memory:", temp_store: :memory)
     {:ok, _} = Adapter.execute(conn, "CREATE TABLE rows_table (value INTEGER)", [], [])
     {:ok, _} = Adapter.execute(conn, "INSERT INTO rows_table VALUES (1), (2)", [], [])
     on_exit(fn -> Adapter.disconnect(conn) end)

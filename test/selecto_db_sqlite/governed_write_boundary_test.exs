@@ -33,7 +33,7 @@ defmodule SelectoDBSQLite.GovernedWriteBoundaryIntegrationTest do
   @seed [[1, 7, "a"], [2, 7, "b"], [3, 8, "c"]]
 
   setup do
-    {:ok, connection} = Adapter.connect(database: ":memory:")
+    {:ok, connection} = Adapter.connect(database: ":memory:", temp_store: :memory)
 
     execute!(connection, """
     CREATE TABLE selecto_governed_writes (

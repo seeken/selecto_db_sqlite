@@ -13,7 +13,7 @@ defmodule SelectoDBSQLite.DocumentAggregateTest do
   ]
 
   setup do
-    {:ok, connection} = Adapter.connect(database: ":memory:")
+    {:ok, connection} = Adapter.connect(database: ":memory:", temp_store: :memory)
     :ok = Exqlite.Sqlite3.execute(connection, "CREATE TABLE work_orders (document TEXT NOT NULL)")
 
     :ok =

@@ -4,7 +4,7 @@ defmodule SelectoDBSQLite.JsonContainmentTest do
   alias SelectoDBSQLite.{Adapter, JsonContainment}
 
   setup do
-    {:ok, connection} = Adapter.connect(database: ":memory:")
+    {:ok, connection} = Adapter.connect(database: ":memory:", temp_store: :memory)
     on_exit(fn -> Adapter.disconnect(connection) end)
 
     {:ok, _} =
@@ -223,6 +223,7 @@ defmodule SelectoDBSQLite.JsonContainmentTest do
 
   test "adopts raw connections and disables extension loading on repeated adoption" do
     {:ok, raw} = Exqlite.Sqlite3.open(":memory:")
+    :ok = Exqlite.Sqlite3.execute(raw, "PRAGMA temp_store=MEMORY")
     on_exit(fn -> Adapter.disconnect(raw) end)
     refute Adapter.supports?(raw, :json_contains)
     assert {:ok, ^raw} = Adapter.connect(raw)

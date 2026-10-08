@@ -20,7 +20,7 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
   alias SelectoDBSQLite.Adapter
 
   setup do
-    {:ok, connection} = Adapter.connect(database: ":memory:")
+    {:ok, connection} = Adapter.connect(database: ":memory:", temp_store: :memory)
 
     execute!(connection, """
     CREATE TABLE items (
@@ -236,8 +236,8 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
 
     parent = self()
 
-    {:ok, first} = Adapter.connect(database: database)
-    {:ok, second} = Adapter.connect(database: database)
+    {:ok, first} = Adapter.connect(database: database, temp_store: :memory)
+    {:ok, second} = Adapter.connect(database: database, temp_store: :memory)
 
     on_exit(fn -> Exqlite.Sqlite3.close(first) end)
     on_exit(fn -> Exqlite.Sqlite3.close(second) end)

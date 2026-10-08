@@ -5,7 +5,7 @@ defmodule SelectoDBSQLite.DocumentObjectRelationTest do
   alias SelectoDBSQLite.{Adapter, DocumentQueryAdapter}
 
   setup do
-    {:ok, db} = Adapter.connect(database: ":memory:")
+    {:ok, db} = Adapter.connect(database: ":memory:", temp_store: :memory)
     :ok = Exqlite.Sqlite3.execute(db, "CREATE TABLE work_orders (document TEXT NOT NULL)")
 
     :ok =

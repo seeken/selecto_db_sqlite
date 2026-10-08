@@ -5,7 +5,7 @@ defmodule SelectoDBSQLite.TransactionOwnershipTest do
   alias Selecto.Write.{Command, Result, Error}
 
   setup do
-    {:ok, connection} = Adapter.connect(database: ":memory:")
+    {:ok, connection} = Adapter.connect(database: ":memory:", temp_store: :memory)
     execute!(connection, "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
     on_exit(fn -> Adapter.disconnect(connection) end)
     %{connection: connection}

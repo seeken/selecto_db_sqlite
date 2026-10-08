@@ -4,7 +4,7 @@ defmodule SelectoDBSQLite.InsertAdmissionTest do
   alias Selecto.Write.{Command, Batch, Error, Result}
 
   setup do
-    {:ok, connection} = Adapter.connect(database: ":memory:")
+    {:ok, connection} = Adapter.connect(database: ":memory:", temp_store: :memory)
     on_exit(fn -> Adapter.disconnect(connection) end)
     %{connection: connection}
   end

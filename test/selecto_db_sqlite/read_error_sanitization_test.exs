@@ -4,7 +4,7 @@ defmodule SelectoDBSQLite.ReadErrorSanitizationTest do
   alias SelectoDBSQLite.Adapter
 
   test "read errors keep a stable category without SQLite text, schema names or SQL" do
-    {:ok, conn} = Adapter.connect(database: ":memory:")
+    {:ok, conn} = Adapter.connect(database: ":memory:", temp_store: :memory)
     on_exit(fn -> Exqlite.Sqlite3.close(conn) end)
 
     assert {:ok, _} =

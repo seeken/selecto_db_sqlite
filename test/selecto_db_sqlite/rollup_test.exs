@@ -5,7 +5,7 @@ defmodule SelectoDBSQLite.RollupTest do
   alias SelectoDBSQLite.Adapter
 
   setup do
-    assert {:ok, connection} = Adapter.connect(database: ":memory:")
+    assert {:ok, connection} = Adapter.connect(database: ":memory:", temp_store: :memory)
     on_exit(fn -> Adapter.disconnect(connection) end)
 
     execute!(

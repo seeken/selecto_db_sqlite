@@ -9,7 +9,7 @@ defmodule SelectoDBSQLite.ValueCalendarCollectionTest do
   alias Selecto.Dialect.Text.Normalization
 
   setup do
-    {:ok, conn} = Adapter.connect(database: ":memory:")
+    {:ok, conn} = Adapter.connect(database: ":memory:", temp_store: :memory)
     on_exit(fn -> Adapter.disconnect(conn) end)
     %{conn: conn}
   end

@@ -5,7 +5,7 @@ defmodule SelectoDBSQLite.DocumentObjectIdTest do
   alias SelectoDBSQLite.{Adapter, DocumentQueryAdapter}
 
   test "native ObjectId releases fail before SQL even when the field is unselected" do
-    {:ok, db} = Adapter.connect(database: ":memory:")
+    {:ok, db} = Adapter.connect(database: ":memory:", temp_store: :memory)
     on_exit(fn -> Exqlite.Sqlite3.close(db) end)
     # Deliberately no source table: none of these valid plans may reach source SQL.
     release = Fixtures.object_id_release()

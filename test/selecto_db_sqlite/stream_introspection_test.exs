@@ -4,7 +4,7 @@ defmodule SelectoDBSQLite.StreamIntrospectionTest do
   alias SelectoDBSQLite.Adapter
 
   setup do
-    {:ok, connection} = Adapter.connect(database: ":memory:")
+    {:ok, connection} = Adapter.connect(database: ":memory:", temp_store: :memory)
     on_exit(fn -> Adapter.disconnect(connection) end)
     %{connection: connection}
   end

@@ -4,7 +4,7 @@ defmodule SelectoDBSQLite.PlaceholderConversionTest do
   alias SelectoDBSQLite.Adapter
 
   setup do
-    {:ok, connection} = Adapter.connect(database: ":memory:")
+    {:ok, connection} = Adapter.connect(database: ":memory:", temp_store: :memory)
     on_exit(fn -> Exqlite.Sqlite3.close(connection) end)
     %{connection: connection}
   end

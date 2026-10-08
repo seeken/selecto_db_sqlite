@@ -30,7 +30,9 @@ defmodule SelectoDBSQLite.ConnectionOptionsTest do
   end
 
   test "SQLite retains its supported journal mode for memory databases requesting WAL" do
-    assert {:ok, connection} = Adapter.connect(database: ":memory:", journal_mode: :wal)
+    assert {:ok, connection} =
+             Adapter.connect(database: ":memory:", temp_store: :memory, journal_mode: :wal)
+
     on_exit(fn -> Adapter.disconnect(connection) end)
 
     assert {:ok, %{rows: [["memory"]]}} =
@@ -75,7 +77,9 @@ defmodule SelectoDBSQLite.ConnectionOptionsTest do
   end
 
   test "passes through caller-owned connections without resetting options" do
-    assert {:ok, connection} = Adapter.connect(database: ":memory:", foreign_keys: :off)
+    assert {:ok, connection} =
+             Adapter.connect(database: ":memory:", temp_store: :memory, foreign_keys: :off)
+
     on_exit(fn -> Adapter.disconnect(connection) end)
     assert Adapter.connect(connection) == {:ok, connection}
     assert {:ok, %{rows: [[0]]}} = Adapter.execute(connection, "PRAGMA foreign_keys", [], [])
