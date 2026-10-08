@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Correct ordinary JSON object/scalar-array predicates with type-aware null,
+  boolean, numeric and text comparisons, object/array guards, empty-object and
+  empty-any/all semantics, and structured refusals for nested-array requests.
+- Apply and validate documented connection pragmas, driver modes and native
+  extension loading; fail setup on invalid options or failed extensions.
+- Add incremental deadline-aware row streams, structured relation/column/key/
+  index introspection and SQLite query-plan analysis. Keep legacy adapter-name
+  delegates consistent with the public ports.
+- Interrupt timed-out SQLite execution, and preserve caller-owned transactions
+  with isolated savepoints on success, failure and exception paths.
+- Replace the file-backed competing-writer test with shared in-memory lock
+  refusal/retry coverage; all SQLite test databases remain in memory.
+
 - `execute_write/3` and `execute_prepared_write/3` refuse a write without the
   `Selecto.Write.Authorization` the governed entry point (`SelectoUpdato`)
   issued for exactly that command, batch or graph, with `:ungoverned_write` and

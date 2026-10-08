@@ -10,7 +10,7 @@ Add `selecto_db_sqlite` to your list of dependencies:
 def deps do
   [
     {:selecto, ">= 0.5.0 and < 0.6.0"},
-    {:selecto_db_sqlite, "~> 0.2"},
+    {:selecto_db_sqlite, "~> 0.5"},
     {:exqlite, "~> 0.13"}
   ]
 end
@@ -41,10 +41,12 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
 - ✅ Query execution
 - ✅ Joins (INNER, LEFT, CROSS)
 - ✅ CTEs and recursive CTEs
-- ✅ Window functions (SQLite 3.25+)
+- ✅ Window functions (basic windows: SQLite 3.25+; GROUPS/newer RANGE frames: 3.28+)
 - ✅ JSON operations (JSON1 extension)
 - ✅ Full-text search (FTS5 extension)
-- ✅ Savepoints
+- ✅ Savepoints, including caller-owned transactions
+- ✅ Incremental streaming with statement cleanup and deadlines
+- ✅ Table/view, column, primary-key, foreign-key, and index introspection
 - ✅ In-memory databases
 - ✅ Attached databases
 - ✅ EXPLAIN QUERY PLAN
@@ -53,8 +55,8 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
 - ✅ `RETURNING` and generated-key graphs on SQLite 3.35+
 
 ### Limitations
-- ❌ RIGHT JOIN (emulate with LEFT JOIN)
-- ❌ FULL OUTER JOIN (emulate with UNION)
+- The documented portable join subset is INNER, LEFT, and CROSS. SQLite itself
+  supports RIGHT and FULL OUTER joins starting in 3.39.0.
 - ❌ Stored procedures
 - ❌ LATERAL joins
 - ❌ Native array types (use JSON)
@@ -62,6 +64,14 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
 - ⚠️ Single writer at a time
 - ⚠️ Write capabilities are probed from the connected SQLite runtime and fail
   closed when `RETURNING` is unavailable
+- `EXPLAIN QUERY PLAN` provides plan descriptions; SQLite has no native
+  `EXPLAIN ANALYZE` or PostgreSQL plan-cost/timing fields.
+
+The available JSON, FTS5, math, and newer SQL features depend on the connected
+SQLite library's version and build. Coarse `supports?/1` flags describe adapter
+ports; they do not install missing engine extensions. Use a current SQLite
+build for the complete adapter feature set. `write_capabilities/1` reports the
+connected version and gates `RETURNING` at 3.35.0.
 
 ## Governed writes
 
@@ -91,6 +101,14 @@ for application code.
 | :uuid | TEXT | String |
 | :binary | BLOB | Binary |
 
+NUMERIC affinity can convert decimal text to a floating-point or integer SQLite
+value. This adapter does not promise fixed-scale or arbitrary-precision decimal
+storage. Ordinary JSON containment distinguishes booleans from numbers, explicit
+JSON null from a missing member, and text from numeric values. It accepts nested
+objects and scalar members; nested array/object array-membership requests fail
+validation. An empty object matches objects, an empty array-any matches nothing,
+and an empty array-all matches only valid arrays.
+
 ## SQLite Pragmas
 
 Configure SQLite behavior with pragmas:
@@ -107,19 +125,29 @@ config = [
 ]
 ```
 
+All shown options are validated and applied. `foreign_keys` defaults to `:on`.
+`mode` accepts Exqlite's `:readonly`, `:readwrite`, `:create`, or compatible mode
+lists. Invalid or unknown connection options return an error before opening the
+database. SQLite may retain a supported journal mode instead of the requested
+one: in-memory databases retain `memory` when `:wal` is requested. Read back
+`PRAGMA journal_mode` to inspect the effective setting.
+
 ## Extensions
 
-Enable SQLite extensions:
+Load trusted native SQLite extensions:
 
 ```elixir
 config = [
   database: "app.db",
   extensions: [
-    "path/to/json1.so",     # JSON support
-    "path/to/fts5.so"       # Full-text search
+    "/absolute/path/to/custom_extension.so"
   ]
 ]
 ```
+
+Paths must name existing native libraries. Loading failures fail connection
+setup; extension loading is disabled again after configuration. Modern SQLite
+normally includes JSON support, and bundled FTS5 builds need no loadable library.
 
 ## Examples
 
@@ -146,15 +174,35 @@ end)
 The configured domain remains the root relation; the CTE is an additional
 governed query member rather than a replacement `FROM` source.
 
-### Window Functions (SQLite 3.25+)
+### Window Functions
 ```elixir
 selecto
-|> Selecto.select([
-  "name",
-  {:window, "ROW_NUMBER() OVER (ORDER BY created_at)"}
-])
+|> Selecto.select(["name"])
+|> Selecto.window_function(:row_number,
+  over: [order_by: ["created_at"]], as: "row_number")
 |> Selecto.execute()
 ```
+
+### Streaming, Introspection, and Query Plans
+
+```elixir
+{:ok, stream} = Selecto.execute_stream(selecto, timeout: 5_000)
+first_ten = Enum.take(stream, 10)
+
+{:ok, tables} = SelectoDBSQLite.Adapter.list_tables(conn)
+{:ok, metadata} = SelectoDBSQLite.Adapter.introspect_table(conn, "orders")
+{:ok, plan} = Selecto.Performance.QueryAnalyzer.get_query_plan(selecto)
+```
+
+The stream fetches rows incrementally and releases its statement on early halt,
+completion, or error. Each enumeration starts a new statement; consume it before
+closing the connection. Its deadline includes consumer time between rows.
+Introspection defaults to schema `"main"`; pass `schema: "temp"` or an attached
+database name when needed. Foreign-key and index metadata retain composite-key
+positions and SQLite actions.
+
+All SQLite tests use `:memory:` databases, or a named
+`file:name?mode=memory&cache=shared` URI when separate handles must share state.
 
 ### Full-Text Search (FTS5)
 ```elixir

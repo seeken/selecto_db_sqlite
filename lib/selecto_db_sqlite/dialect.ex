@@ -312,23 +312,20 @@ defmodule SelectoDBSQLite.Dialect do
   end
 
   @impl true
-  def render_json_contains(%Contains{value: value} = fragment, _selecto) when is_map(value) do
-    clauses =
-      value
-      |> flatten_object([])
-      |> Enum.map(fn {path, path_value} ->
-        [
-          "json_extract(",
-          column_ref(fragment),
-          ", '",
-          json_path(path),
-          "') = ",
-          literal(path_value)
-        ]
-      end)
-      |> Enum.intersperse(" AND ")
+  def render_json_contains(%Contains{value: value} = fragment, _selecto)
+      when is_map(value) and not is_struct(value) do
+    with {:ok, members} <- object_members(value, []) do
+      clauses =
+        Enum.map(members, fn {path, path_value} ->
+          typed_json_match(
+            ["json_type(", column_ref(fragment), ", '", object_path(path), "')"],
+            ["json_extract(", column_ref(fragment), ", '", object_path(path), "')"],
+            path_value
+          )
+        end)
 
-    {:ok, clauses}
+      {:ok, valid_json_predicate(fragment, Enum.intersperse(clauses, " AND "))}
+    end
   end
 
   def render_json_contains(%Contains{value: value}, _selecto) do
@@ -354,45 +351,77 @@ defmodule SelectoDBSQLite.Dialect do
   @impl true
   def render_json_array_contains(%ArrayContains{value: values} = fragment, selecto)
       when is_list(values) do
-    values
-    |> Enum.map(fn value ->
-      render_json_array_contains(%{fragment | value: value}, selecto) |> elem(1)
-    end)
-    |> Enum.intersperse(" OR ")
-    |> then(&{:ok, &1})
+    render_array_members(fragment, values, " OR ", "0", selecto)
   end
 
   def render_json_array_contains(%ArrayContains{} = fragment, _selecto) do
-    {:ok,
-     [
-       "EXISTS (SELECT 1 FROM json_each(",
-       column_ref(fragment),
-       ", '",
-       json_path(fragment.path),
-       "') WHERE value = ",
-       literal(fragment.value),
-       ")"
-     ]}
+    render_array_members(fragment, [fragment.value], " OR ", "0", nil)
   end
 
   @impl true
   def render_json_array_contains_all(%ArrayContainsAll{} = fragment, selecto) do
-    fragment.values
-    |> Enum.map(fn value ->
-      render_json_array_contains(
-        %ArrayContains{
-          column: fragment.column,
-          path: fragment.path,
-          value: value,
-          table_alias: fragment.table_alias
-        },
-        selecto
-      )
-      |> elem(1)
-    end)
-    |> Enum.intersperse(" AND ")
-    |> then(&{:ok, &1})
+    render_array_members(fragment, fragment.values, " AND ", "1", selecto)
   end
+
+  defp render_array_members(fragment, values, operator, empty, _selecto) when is_list(values) do
+    if Enum.all?(values, &json_scalar?/1) do
+      members =
+        Enum.map(values, fn value ->
+          [
+            "EXISTS (SELECT 1 FROM json_each(",
+            column_ref(fragment),
+            ", '",
+            json_path(fragment.path),
+            "') AS selecto_json_member WHERE ",
+            typed_json_match("selecto_json_member.type", "selecto_json_member.value", value),
+            ")"
+          ]
+        end)
+
+      predicate = if members == [], do: empty, else: Enum.intersperse(members, operator)
+
+      {:ok,
+       valid_json_predicate(fragment, [
+         "json_type(",
+         column_ref(fragment),
+         ", '",
+         json_path(fragment.path),
+         "') = 'array' AND (",
+         predicate,
+         ")"
+       ])}
+    else
+      json_validation_error("SQLite JSON array membership supports only scalar values", values)
+    end
+  end
+
+  defp render_array_members(_fragment, values, _operator, _empty, _selecto),
+    do: json_validation_error("SQLite JSON array membership requires a list of values", values)
+
+  defp valid_json_predicate(fragment, predicate),
+    do: ["(CASE WHEN json_valid(", column_ref(fragment), ") THEN (", predicate, ") ELSE 0 END)"]
+
+  defp typed_json_match(type, _value, :object), do: [type, " = 'object'"]
+  defp typed_json_match(type, _value, nil), do: [type, " = 'null'"]
+  defp typed_json_match(type, _value, true), do: [type, " = 'true'"]
+  defp typed_json_match(type, _value, false), do: [type, " = 'false'"]
+
+  defp typed_json_match(type, value, expected) when is_number(expected),
+    do: ["(", type, " IN ('integer', 'real') AND ", value, " = ", {:param, expected}, ")"]
+
+  defp typed_json_match(type, value, expected) when is_binary(expected),
+    do: ["(", type, " = 'text' AND ", value, " = ", {:param, expected}, ")"]
+
+  defp json_scalar?(value),
+    do: is_nil(value) or is_boolean(value) or is_number(value) or is_binary(value)
+
+  defp json_validation_error(message, value),
+    do:
+      {:error,
+       Selecto.Error.validation_error(message, %{
+         unsupported_feature: :json_contains,
+         value: value
+       })}
 
   @impl true
   def render_json_operation(%Operation{} = operation, selecto) do
@@ -555,31 +584,40 @@ defmodule SelectoDBSQLite.Dialect do
       else: raise(ArgumentError, "invalid JSON path segment: #{inspect(segment)}")
   end
 
-  defp flatten_object(map, prefix) do
-    Enum.flat_map(map, fn
-      {key, nested} when is_map(nested) ->
-        flatten_object(nested, prefix ++ [to_string(key)])
+  # Keep a type check for every object, including empty objects. Numeric object
+  # keys are labels rather than array indexes, so containment has its own path.
+  defp object_members(map, prefix) do
+    map
+    |> Enum.sort_by(fn {key, _value} -> inspect(key) end)
+    |> Enum.reduce_while({:ok, [{prefix, :object}]}, fn {key, value}, {:ok, members} ->
+      cond do
+        not (is_binary(key) or is_atom(key) or is_integer(key)) ->
+          {:halt, json_validation_error("Invalid SQLite JSON object key", key)}
 
-      {key, value} when is_list(value) ->
-        raise Selecto.Error.to_exception(
-                Selecto.Error.validation_error(
-                  "SQLite JSON containment does not support nested arrays",
-                  %{path: prefix ++ [to_string(key)]}
-                )
-              )
+        String.contains?(to_string(key), ["\"", "\\", <<0>>]) ->
+          {:halt, json_validation_error("Unsupported SQLite JSON object key", key)}
 
-      {key, value} ->
-        [{prefix ++ [to_string(key)], value}]
+        is_map(value) and not is_struct(value) ->
+          case object_members(value, prefix ++ [to_string(key)]) do
+            {:ok, nested} -> {:cont, {:ok, members ++ nested}}
+            error -> {:halt, error}
+          end
+
+        json_scalar?(value) ->
+          {:cont, {:ok, members ++ [{prefix ++ [to_string(key)], value}]}}
+
+        true ->
+          {:halt,
+           json_validation_error(
+             "SQLite JSON containment supports scalar and object members",
+             value
+           )}
+      end
     end)
   end
 
-  defp literal(value) when is_binary(value), do: ["'", escape_literal(value), "'"]
-  defp literal(value) when is_integer(value), do: Integer.to_string(value)
-  defp literal(value) when is_float(value), do: Float.to_string(value)
-  defp literal(true), do: "1"
-  defp literal(false), do: "0"
-  defp literal(nil), do: "NULL"
-  defp literal(value), do: ["'", value |> Jason.encode!() |> escape_literal(), "'"]
+  defp object_path(path),
+    do: ["$" | Enum.map(path, &[".\"", &1, "\""])] |> IO.iodata_to_binary() |> escape_literal()
 
   defp cast_json(extraction, nil), do: extraction
   defp cast_json(extraction, :integer), do: ["CAST(", extraction, " AS INTEGER)"]

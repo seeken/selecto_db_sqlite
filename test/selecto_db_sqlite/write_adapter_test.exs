@@ -228,19 +228,20 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
              Adapter.execute_prepared_write_unsafe(connection, prepare)
   end
 
-  test "file-backed prepared writers serialize through the immediate transaction" do
-    path =
-      Path.join(System.tmp_dir!(), "selecto-sqlite-lock-#{System.unique_integer([:positive])}.db")
+  test "shared in-memory prepared writers refuse a competing immediate transaction" do
+    database =
+      "file:selecto-sqlite-lock-#{System.unique_integer([:positive])}?mode=memory&cache=shared"
 
     parent = self()
 
-    on_exit(fn -> File.rm(path) end)
-
-    {:ok, first} = Adapter.connect(database: path, busy_timeout: 2_000)
-    {:ok, second} = Adapter.connect(database: path, busy_timeout: 2_000)
+    {:ok, first} = Adapter.connect(database: database)
+    {:ok, second} = Adapter.connect(database: database)
 
     on_exit(fn -> Exqlite.Sqlite3.close(first) end)
     on_exit(fn -> Exqlite.Sqlite3.close(second) end)
+
+    assert rows!(first, "PRAGMA database_list") == [[0, "main", ""]]
+    assert rows!(second, "PRAGMA database_list") == [[0, "main", ""]]
 
     execute!(first, "CREATE TABLE locked_items (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
     execute!(first, "INSERT INTO locked_items (id, name) VALUES (1, 'Before')")
@@ -296,12 +297,30 @@ defmodule SelectoDBSQLite.WriteAdapterTest do
         result
       end)
 
-    refute_receive {:second_sqlite_writer_result, _}, 75
+    assert {:error, %Error{}} = Task.await(second_task, 5_000)
+    assert_receive {:second_sqlite_writer_result, {:error, %Error{}}}
     send(first_task.pid, :release_first_sqlite_writer)
 
     assert {:ok, %Result{operation: :update}} = Task.await(first_task, 5_000)
-    assert {:ok, %Result{operation: :insert}} = Task.await(second_task, 5_000)
-    assert_receive {:second_sqlite_writer_result, {:ok, %Result{operation: :insert}}}
+
+    assert {:ok, %Result{operation: :insert}} =
+             Adapter.execute_write_unsafe(
+               second,
+               command!(%{
+                 operation: :insert,
+                 relation: :locked_items,
+                 assignments: [
+                   %{field: :id, value: {:literal, 2}},
+                   %{field: :name, value: {:literal, "Second"}}
+                 ],
+                 returning: :none
+               })
+             )
+
+    assert rows!(first, "SELECT id, name FROM locked_items ORDER BY id") == [
+             [1, "First"],
+             [2, "Second"]
+           ]
   end
 
   test "rolls back a cardinality mismatch", %{connection: connection, selecto: selecto} do

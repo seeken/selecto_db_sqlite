@@ -63,4 +63,21 @@ defmodule SelectoDBSQLite.AdapterTest do
                []
              )
   end
+
+  test "preserves embedded NUL text, blobs, NULL and signed 64-bit integers", %{
+    connection: connection
+  } do
+    text = "a\0b"
+    blob = <<0, 255, 0>>
+    maximum = 9_223_372_036_854_775_807
+    minimum = -9_223_372_036_854_775_808
+
+    assert {:ok, %{rows: [[^text, ^blob, nil, ^maximum, ^minimum, "text", "blob"]]}} =
+             Adapter.execute(
+               connection,
+               "SELECT ?, ?, ?, ?, ?, typeof(?), typeof(?)",
+               [text, {:blob, blob}, nil, maximum, minimum, text, {:blob, blob}],
+               []
+             )
+  end
 end

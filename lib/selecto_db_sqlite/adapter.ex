@@ -40,6 +40,9 @@ defmodule SelectoDBSQLite.Adapter do
   def dialect, do: SelectoDBSQLite.Dialect
 
   @impl true
+  def adapter_contract_version, do: Selecto.DB.Adapter.contract_version()
+
+  @impl true
   def capability(:text_search) do
     %{
       feature: :text_search,
@@ -55,17 +58,41 @@ defmodule SelectoDBSQLite.Adapter do
 
   @impl true
   def normalize_type(type) when is_binary(type) do
-    case type |> String.trim() |> String.downcase() do
-      value when value in ["integer", "int"] -> :integer
-      value when value in ["real", "double", "float"] -> :float
-      value when value in ["numeric", "decimal"] -> :decimal
-      value when value in ["text", "varchar", "char", "clob"] -> :string
-      "blob" -> :binary
-      "boolean" -> :boolean
-      "date" -> :date
-      value when value in ["datetime", "timestamp"] -> :naive_datetime
-      "json" -> :map
-      _unknown -> type
+    case type
+         |> String.trim()
+         |> String.downcase()
+         |> String.split("(")
+         |> hd()
+         |> String.trim() do
+      value when value in ["integer", "int", "bigint", "smallint", "tinyint", "int2", "int8"] ->
+        :integer
+
+      value when value in ["real", "double", "float"] ->
+        :float
+
+      value when value in ["numeric", "decimal"] ->
+        :decimal
+
+      value when value in ["text", "varchar", "char", "clob"] ->
+        :string
+
+      value when value in ["blob", ""] ->
+        :binary
+
+      "boolean" ->
+        :boolean
+
+      "date" ->
+        :date
+
+      value when value in ["datetime", "timestamp"] ->
+        :naive_datetime
+
+      "json" ->
+        :map
+
+      _unknown ->
+        type
     end
   end
 
@@ -112,12 +139,16 @@ defmodule SelectoDBSQLite.Adapter do
   def connect(opts) when is_map(opts), do: connect(Map.to_list(opts))
 
   def connect(opts) when is_list(opts) do
-    with :ok <- ensure_exqlite() do
-      database = Keyword.get(opts, :database, ":memory:")
+    with :ok <- ensure_exqlite(),
+         {:ok, settings} <- connection_settings(opts),
+         {:ok, connection} <- Exqlite.Sqlite3.open(settings.database, mode: settings.mode) do
+      case configure_connection(connection, settings) do
+        :ok ->
+          {:ok, connection}
 
-      with {:ok, connection} <- Exqlite.Sqlite3.open(database),
-           :ok <- configure_connection(connection, opts) do
-        {:ok, connection}
+        {:error, _} = error ->
+          _ = Exqlite.Sqlite3.close(connection)
+          error
       end
     end
   end
@@ -147,6 +178,44 @@ defmodule SelectoDBSQLite.Adapter do
 
   @impl true
   def execute_raw(connection, query, params), do: execute(connection, query, params, [])
+
+  @impl true
+  def stream(connection, query, params, opts) do
+    with :ok <- ensure_exqlite(),
+         {:ok, sqlite_query, params} <-
+           query |> normalize_query() |> convert_parameters(normalize_params(params || [])) do
+      SelectoDBSQLite.RowStream.build(unwrap_connection(connection), sqlite_query, params, opts)
+    end
+  end
+
+  @impl true
+  def list_tables(connection, opts \\ []),
+    do: SelectoDBSQLite.Introspection.list_tables(connection, opts)
+
+  @impl true
+  def list_relations(connection, opts \\ []),
+    do: SelectoDBSQLite.Introspection.list_relations(connection, opts)
+
+  @impl true
+  def introspect_table(connection, table, opts \\ []),
+    do: SelectoDBSQLite.Introspection.introspect_table(connection, table, opts)
+
+  @impl true
+  def analyze_query(selecto, opts \\ []),
+    do: SelectoDBSQLite.Introspection.analyze_query(selecto, opts)
+
+  @impl true
+  def validate_connection(connection) do
+    case execute(connection, "SELECT 1", [], []) do
+      {:ok, _result} -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
+  @impl true
+  def connection_info(connection) do
+    %{adapter: :sqlite, server_version: sqlite_version(connection)}
+  end
 
   @impl true
   def placeholder(_index), do: "?"
@@ -200,9 +269,9 @@ defmodule SelectoDBSQLite.Adapter do
     connection = unwrap_connection(conn)
     depth = transaction_depth_for(connection)
 
-    with :ok <- begin_transaction(connection, depth) do
+    with {:ok, boundary} <- begin_transaction(connection, depth) do
       put_transaction_depth(connection, depth + 1)
-      execute_transaction_fun(connection, fun, depth + 1)
+      execute_transaction_fun(connection, fun, depth + 1, boundary)
     end
   end
 
@@ -214,7 +283,9 @@ defmodule SelectoDBSQLite.Adapter do
   def supports?(:returning), do: true
   def supports?(:text_search), do: true
   def supports?(:rollup), do: false
-  def supports?(:stream), do: false
+  def supports?(:stream), do: true
+  def supports?(:schema_introspection), do: true
+  def supports?(:query_analysis), do: true
   def supports?(_feature), do: false
 
   @impl Selecto.DB.WriteAdapter
@@ -728,59 +799,76 @@ defmodule SelectoDBSQLite.Adapter do
 
   defp begin_transaction(connection, 0) do
     case execute(connection, "BEGIN IMMEDIATE", [], []) do
-      {:ok, _} -> :ok
+      {:ok, _} ->
+        {:ok, :transaction}
+
+      {:error, reason} ->
+        # Older Exqlite releases do not expose sqlite3_get_autocommit. SQLite's
+        # specific nested-BEGIN refusal establishes caller transaction ownership
+        # without committing or rolling it back. Other failures stay failures.
+        if nested_begin_error?(reason),
+          do: begin_savepoint(connection, 1),
+          else: {:error, reason}
+    end
+  end
+
+  defp begin_transaction(connection, depth), do: begin_savepoint(connection, depth + 1)
+
+  defp nested_begin_error?(%Exqlite.Error{message: message}), do: nested_begin_error?(message)
+  defp nested_begin_error?("cannot start a transaction within a transaction"), do: true
+  defp nested_begin_error?(_reason), do: false
+
+  defp begin_savepoint(connection, depth) do
+    name = "selecto_sp_#{depth}_#{System.unique_integer([:positive])}"
+
+    case execute(connection, "SAVEPOINT #{name}", [], []) do
+      {:ok, _} -> {:ok, {:savepoint, name}}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp begin_transaction(connection, depth) do
-    case execute(connection, "SAVEPOINT #{savepoint_name(depth + 1)}", [], []) do
-      {:ok, _} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp execute_transaction_fun(connection, fun, depth) do
+  defp execute_transaction_fun(connection, fun, depth, boundary) do
     case fun.(connection) do
       {:error, reason} ->
-        rollback(connection, depth, reason)
+        rollback(connection, boundary, reason)
 
       {:ok, result} ->
-        finish_commit(connection, depth, result)
+        finish_commit(connection, boundary, result)
 
       result ->
-        finish_commit(connection, depth, result)
+        finish_commit(connection, boundary, result)
     end
   rescue
-    exception -> rollback(connection, depth, {:transaction_exception, exception})
+    exception -> rollback(connection, boundary, {:transaction_exception, exception})
   catch
-    kind, reason -> rollback(connection, depth, {kind, reason})
+    kind, reason -> rollback(connection, boundary, {kind, reason})
   after
     put_transaction_depth(connection, max(depth - 1, 0))
   end
 
-  defp finish_commit(connection, depth, result) do
-    statement = if depth == 1, do: "COMMIT", else: "RELEASE SAVEPOINT #{savepoint_name(depth)}"
+  defp finish_commit(connection, boundary, result) do
+    statement =
+      case boundary do
+        :transaction -> "COMMIT"
+        {:savepoint, name} -> "RELEASE SAVEPOINT #{name}"
+      end
 
     case execute(connection, statement, [], []) do
       {:ok, _} -> {:ok, result}
-      {:error, reason} -> rollback(connection, depth, reason)
+      {:error, reason} -> rollback(connection, boundary, reason)
     end
   end
 
-  defp rollback(connection, 1, reason) do
+  defp rollback(connection, :transaction, reason) do
     _ = execute(connection, "ROLLBACK", [], [])
     {:error, reason}
   end
 
-  defp rollback(connection, depth, reason) do
-    savepoint = savepoint_name(depth)
+  defp rollback(connection, {:savepoint, savepoint}, reason) do
     _ = execute(connection, "ROLLBACK TO SAVEPOINT #{savepoint}", [], [])
     _ = execute(connection, "RELEASE SAVEPOINT #{savepoint}", [], [])
     {:error, reason}
   end
-
-  defp savepoint_name(depth), do: "selecto_sp_#{depth}"
 
   defp transaction_depth_for(connection),
     do: Process.get(@transaction_depth_key, %{}) |> Map.get(connection, 0)
@@ -798,7 +886,7 @@ defmodule SelectoDBSQLite.Adapter do
   defp execute_prepared(connection, query, params, timeout) do
     case Exqlite.Sqlite3.prepare(connection, query) do
       {:ok, statement} ->
-        result =
+        try do
           with :ok <- Exqlite.Sqlite3.bind(statement, params),
                {:ok, columns} <- Exqlite.Sqlite3.columns(connection, statement),
                {:ok, rows} <- fetch_all(connection, statement, timeout),
@@ -811,9 +899,9 @@ defmodule SelectoDBSQLite.Adapter do
                metadata: %{}
              }}
           end
-
-        _ = Exqlite.Sqlite3.release(connection, statement)
-        result
+        after
+          Exqlite.Sqlite3.release(connection, statement)
+        end
 
       {:error, _} = error ->
         error
@@ -839,27 +927,161 @@ defmodule SelectoDBSQLite.Adapter do
     )
   end
 
-  defp configure_connection(connection, opts) do
-    foreign_keys = Keyword.get(opts, :foreign_keys, :on)
-    foreign_keys_sql = if foreign_keys in [:off, false, 0], do: "OFF", else: "ON"
+  defp connection_settings(opts) do
+    if Keyword.keyword?(opts) do
+      allowed = [
+        :database,
+        :mode,
+        :foreign_keys,
+        :busy_timeout,
+        :journal_mode,
+        :cache_size,
+        :synchronous,
+        :temp_store,
+        :extensions
+      ]
 
-    with :ok <- Exqlite.Sqlite3.execute(connection, "PRAGMA foreign_keys = #{foreign_keys_sql}"),
-         :ok <- configure_busy_timeout(connection, Keyword.get(opts, :busy_timeout)) do
-      :ok
+      case Enum.find(opts, fn {key, _value} -> key not in allowed end) do
+        nil -> validate_connection_settings(opts)
+        {key, value} -> {:error, {:invalid_connection_option, key, value}}
+      end
     else
-      {:error, reason} ->
-        _ = Exqlite.Sqlite3.close(connection)
-        {:error, reason}
+      {:error, {:invalid_connection_options, opts}}
     end
   end
 
-  defp configure_busy_timeout(_connection, nil), do: :ok
+  defp validate_connection_settings(opts) do
+    database = Keyword.get(opts, :database, ":memory:")
+    mode = Keyword.get(opts, :mode, [:readwrite, :create])
+    extensions = Keyword.get(opts, :extensions, [])
 
-  defp configure_busy_timeout(connection, timeout) when is_integer(timeout) and timeout >= 0,
-    do: Exqlite.Sqlite3.execute(connection, "PRAGMA busy_timeout = #{timeout}")
+    with :ok <- validate_database(database),
+         :ok <- validate_open_mode(mode),
+         :ok <- validate_extensions(extensions),
+         {:ok, pragmas} <- connection_pragmas(opts) do
+      {:ok, %{database: database, mode: mode, extensions: extensions, pragmas: pragmas}}
+    end
+  end
 
-  defp configure_busy_timeout(_connection, timeout),
-    do: {:error, {:invalid_busy_timeout, timeout}}
+  defp validate_database(database) when is_binary(database) and byte_size(database) > 0 do
+    if String.contains?(database, <<0>>),
+      do: {:error, {:invalid_connection_option, :database, database}},
+      else: :ok
+  end
+
+  defp validate_database(database),
+    do: {:error, {:invalid_connection_option, :database, database}}
+
+  defp validate_open_mode(mode) when mode in [:readwrite, :readonly, :create], do: :ok
+
+  defp validate_open_mode(modes) when is_list(modes) and modes != [] do
+    valid? =
+      Enum.all?(modes, &(&1 in [:readwrite, :readonly, :create, :nomutex])) and
+        Enum.any?(modes, &(&1 in [:readwrite, :readonly, :create])) and
+        not (:readwrite in modes and :readonly in modes) and
+        not (:readonly in modes and :create in modes)
+
+    if valid?, do: :ok, else: {:error, {:invalid_connection_option, :mode, modes}}
+  end
+
+  defp validate_open_mode(mode), do: {:error, {:invalid_connection_option, :mode, mode}}
+
+  defp validate_extensions(extensions) when is_list(extensions) do
+    Enum.reduce_while(extensions, :ok, fn path, :ok ->
+      if is_binary(path) and byte_size(path) > 0 and not String.contains?(path, <<0>>) do
+        if File.regular?(path),
+          do: {:cont, :ok},
+          else: {:halt, {:error, {:sqlite_extension_not_found, path}}}
+      else
+        {:halt, {:error, {:invalid_connection_option, :extensions, extensions}}}
+      end
+    end)
+  end
+
+  defp validate_extensions(value), do: {:error, {:invalid_connection_option, :extensions, value}}
+
+  defp connection_pragmas(opts) do
+    opts = Keyword.put_new(opts, :foreign_keys, :on)
+
+    [:foreign_keys, :busy_timeout, :journal_mode, :cache_size, :synchronous, :temp_store]
+    |> Enum.reduce_while({:ok, []}, fn key, {:ok, pragmas} ->
+      if Keyword.has_key?(opts, key) do
+        case pragma_value(key, Keyword.fetch!(opts, key)) do
+          {:ok, value} -> {:cont, {:ok, pragmas ++ [{key, value}]}}
+          error -> {:halt, error}
+        end
+      else
+        {:cont, {:ok, pragmas}}
+      end
+    end)
+  end
+
+  defp pragma_value(:foreign_keys, value) when value in [:on, true, 1, "on", "ON"],
+    do: {:ok, "ON"}
+
+  defp pragma_value(:foreign_keys, value) when value in [:off, false, 0, "off", "OFF"],
+    do: {:ok, "OFF"}
+
+  defp pragma_value(:busy_timeout, value) when is_integer(value) and value in 0..2_147_483_647,
+    do: {:ok, Integer.to_string(value)}
+
+  defp pragma_value(:cache_size, value)
+       when is_integer(value) and value in -2_147_483_648..2_147_483_647,
+       do: {:ok, Integer.to_string(value)}
+
+  defp pragma_value(key, value) when key in [:journal_mode, :synchronous, :temp_store] do
+    allowed =
+      case key do
+        :journal_mode -> ["DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"]
+        :synchronous -> ["OFF", "NORMAL", "FULL", "EXTRA", "0", "1", "2", "3"]
+        :temp_store -> ["DEFAULT", "FILE", "MEMORY", "0", "1", "2"]
+      end
+
+    normalized =
+      if is_atom(value) or is_binary(value) or is_integer(value),
+        do: value |> to_string() |> String.upcase(),
+        else: nil
+
+    if normalized in allowed,
+      do: {:ok, normalized},
+      else: {:error, {:invalid_connection_option, key, value}}
+  end
+
+  defp pragma_value(:busy_timeout, value), do: {:error, {:invalid_busy_timeout, value}}
+  defp pragma_value(key, value), do: {:error, {:invalid_connection_option, key, value}}
+
+  defp configure_connection(connection, settings) do
+    with :ok <- configure_pragmas(connection, settings.pragmas),
+         :ok <- load_extensions(connection, settings.extensions) do
+      :ok
+    end
+  end
+
+  defp configure_pragmas(connection, pragmas) do
+    Enum.reduce_while(pragmas, :ok, fn {key, value}, :ok ->
+      case Exqlite.Sqlite3.execute(connection, "PRAGMA #{key} = #{value}") do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp load_extensions(_connection, []), do: :ok
+
+  defp load_extensions(connection, extensions) do
+    with :ok <- Exqlite.Sqlite3.enable_load_extension(connection, true) do
+      try do
+        Enum.reduce_while(extensions, :ok, fn path, :ok ->
+          case execute(connection, "SELECT load_extension(?)", [path], []) do
+            {:ok, _result} -> {:cont, :ok}
+            {:error, reason} -> {:halt, {:error, {:sqlite_extension_load_failed, path, reason}}}
+          end
+        end)
+      after
+        Exqlite.Sqlite3.enable_load_extension(connection, false)
+      end
+    end
+  end
 
   defp sqlite_version(connection) do
     case execute(connection, "SELECT sqlite_version()", [], []) do
@@ -902,9 +1124,14 @@ defmodule SelectoDBSQLite.Adapter do
   defp fetch_all(db, statement, timeout) do
     task = Task.async(fn -> fetch_rows(db, statement, []) end)
 
-    case Task.yield(task, timeout) || Task.shutdown(task) do
-      {:ok, result} -> result
-      nil -> {:error, :timeout}
+    case Task.yield(task, timeout) do
+      {:ok, result} ->
+        result
+
+      nil ->
+        _ = Exqlite.Sqlite3.interrupt(db)
+        _ = Task.shutdown(task)
+        {:error, :timeout}
     end
   end
 
