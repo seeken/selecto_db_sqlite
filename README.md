@@ -511,10 +511,39 @@ effects are not established by this check. Public native
 controls are available in `scripts/sqlite_incoming_fk_regression.exs` and
 `scripts/sqlite_delete_effects_regression.exs` with the selected Updato dependency.
 
+Protected UPSERT candidates use an adapter-owned branch witness inside the same
+prepared transaction. Native `index_list`/`index_xinfo` facts establish a rowid
+target or a complete column-only unique index. Multiple matching indexes must
+agree on each field's comparison; partial, expression, unavailable and ambiguous
+arbiters remain pending. The attempted insert values pass native column affinity
+before lookup, including NULL's nonconflicting unique-key behavior. On conflict,
+the candidate combines the protected prior row with only the actual governed
+update field list. Insertion-only assignments remain part of the attempted
+INSERT and never overwrite the update candidate.
+
+Private transaction-scoped receipts bind the final command, context, branch and
+physical row witness. The full batch/graph proves independent selections before
+its first mutation, and dispatch rechecks the selected branch and prior row.
+Distinct protected rows and new keys can compose; overlapping physical rows,
+new conflict keys or unproved mixed-write dependencies refuse. Mixed updates and
+deletes must exclude both the stored row and the final native candidate: an
+insert or changed value can make an initially false predicate match. The proof
+uses native column affinity, collation and NULL behavior, and refuses unavailable
+predicate dependencies. Same-table implicit
+sync cleanup refuses while its retained identities are not yet materialized;
+cleanup of unrelated tables keeps its ordinary ownership proof. Connected
+previews use the same proof and roll back. Consumed omitted NULL, Boolean, numeric and
+single-quoted string defaults pass a bounded literal grammar and native affinity
+projection. Functions, expressions, volatile defaults and consumed generated
+rowids remain pending; ordinary unconsumed defaults are left to SQLite. A
+generated rowid also refuses dependent same-table plans when its eventual
+identity cannot be proved. This path does not execute arbitrary schema default
+SQL or trial business mutations to predict a branch.
+
 Native rule admission refuses trigger-bearing targets, any generated or hidden
 column, virtual/shadow tables, TEMP catalog shadows, custom collations, ambiguous
 storage types, and unresolved generated values or required external evidence.
-Upsert and delete rules requiring a final candidate remain explicit refusals.
+Delete rules requiring a final candidate remain explicit refusals.
 All SQLite tests use in-memory databases.
 
 The ordinary-source proof also rejects physical schema `ON CONFLICT REPLACE`

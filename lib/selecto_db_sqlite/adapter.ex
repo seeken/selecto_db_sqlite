@@ -322,6 +322,10 @@ defmodule SelectoDBSQLite.Adapter do
       prepared_candidate_state: true,
       native_rule_candidates:
         SelectoDBSQLite.RuntimeCapabilities.version_at_least?(version, {3, 37, 0}),
+      protected_upsert_candidates:
+        runtime.features.schema_introspection and
+          SelectoDBSQLite.RuntimeCapabilities.version_at_least?(version, {3, 37, 0}) and
+          "OMIT_UPSERT" not in runtime.compile_options,
       typed_insert_admission:
         runtime.features.schema_introspection and
           SelectoDBSQLite.RuntimeCapabilities.version_at_least?(version, {3, 37, 0}),
@@ -365,11 +369,13 @@ defmodule SelectoDBSQLite.Adapter do
         transaction(
           connection,
           fn tx ->
+            prepared_opts = Keyword.put(opts, :protected_candidate_tracker, tracker)
+
             loader =
               &load_prepared_state(
                 tx,
                 &1,
-                Keyword.put(opts, :protected_candidate_tracker, tracker)
+                prepared_opts
               )
 
             result =
@@ -380,10 +386,16 @@ defmodule SelectoDBSQLite.Adapter do
                      SelectoDBSQLite.PreparedWriteSafety.validate(
                        tx,
                        write,
-                       Keyword.put(opts, :context, context)
+                       Keyword.put(prepared_opts, :context, context)
                      ),
-                   :ok <- SelectoDBSQLite.GraphOwnership.validate(tx, write, opts) do
-                preview_write(tx, write, Keyword.put(opts, :context, context))
+                   :ok <- SelectoDBSQLite.GraphOwnership.validate(tx, write, prepared_opts),
+                   :ok <-
+                     SelectoDBSQLite.UpsertCandidate.validate(
+                       tx,
+                       write,
+                       Keyword.put(prepared_opts, :context, context)
+                     ) do
+                preview_write(tx, write, Keyword.put(prepared_opts, :context, context))
               end
 
             {:error, {tag, result}}
@@ -429,6 +441,7 @@ defmodule SelectoDBSQLite.Adapter do
     with :ok <- Command.validate(command) do
       with_write_transaction(connection, opts, fn tx ->
         with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, command, opts),
+             :ok <- SelectoDBSQLite.UpsertCandidate.validate(tx, command, opts),
              do: execute_write_command(tx, command, opts)
       end)
     end
@@ -437,7 +450,8 @@ defmodule SelectoDBSQLite.Adapter do
   def execute_write_unsafe(connection, %Batch{} = batch, opts) do
     with :ok <- Batch.validate(batch) do
       with_write_transaction(connection, opts, fn tx ->
-        with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, batch, opts) do
+        with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, batch, opts),
+             :ok <- SelectoDBSQLite.UpsertCandidate.validate(tx, batch, opts) do
           Enum.reduce_while(batch.commands, {:ok, []}, fn command, {:ok, results} ->
             case execute_write_command(tx, command, opts) do
               {:ok, result} -> {:cont, {:ok, results ++ [result]}}
@@ -503,9 +517,15 @@ defmodule SelectoDBSQLite.Adapter do
                SelectoDBSQLite.PreparedWriteSafety.validate(
                  tx,
                  write,
-                 Keyword.put(opts, :context, context)
+                 Keyword.put(prepared_opts, :context, context)
+               ),
+             :ok <-
+               SelectoDBSQLite.UpsertCandidate.validate(
+                 tx,
+                 write,
+                 Keyword.put(prepared_opts, :context, context)
                ) do
-          execute_prepared(tx, write, Keyword.put(opts, :context, context))
+          execute_prepared(tx, write, Keyword.put(prepared_opts, :context, context))
         else
           {:error, %Error{} = error} -> {:error, error}
           {:error, reason} -> {:error, write_error(:candidate_preparation_failed, reason)}
@@ -783,6 +803,9 @@ defmodule SelectoDBSQLite.Adapter do
   defp load_prepared_state(connection, %Selecto.Write.RuleCandidateRequest{} = request, opts),
     do: SelectoDBSQLite.RuleCandidate.project(connection, request, opts)
 
+  defp load_prepared_state(connection, %Selecto.Write.UpsertCandidateRequest{} = request, opts),
+    do: SelectoDBSQLite.UpsertCandidate.project(connection, request, opts)
+
   defp load_prepared_state(_connection, request, _opts),
     do:
       {:error,
@@ -842,7 +865,8 @@ defmodule SelectoDBSQLite.Adapter do
 
   defp execute_graph(connection, graph, opts) do
     with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(connection, graph, opts),
-         :ok <- SelectoDBSQLite.GraphOwnership.validate(connection, graph, opts) do
+         :ok <- SelectoDBSQLite.GraphOwnership.validate(connection, graph, opts),
+         :ok <- SelectoDBSQLite.UpsertCandidate.validate(connection, graph, opts) do
       execute_validated_graph(connection, graph, opts)
     end
   end
@@ -917,7 +941,8 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   defp execute_write_command(connection, command, opts) do
-    with :ok <- SelectoDBSQLite.InsertAdmission.enforce(connection, command, opts),
+    with :ok <- SelectoDBSQLite.UpsertCandidate.validate_command(connection, command, opts),
+         :ok <- SelectoDBSQLite.InsertAdmission.enforce(connection, command, opts),
          {:ok, statement} <- WriteCompiler.compile(command, opts),
          {:ok, query_result} <- execute(connection, statement.text, statement.params, opts),
          {:ok, affected_rows} <- enforce_cardinality(command, query_result) do
