@@ -43,51 +43,61 @@ defmodule SelectoDBSQLite.InsertAdmission do
 
   @doc false
   def storage_schema(connection, table, opts) do
-    with {:ok, %{rows: []}} <-
+    with true <- is_binary(table) and table != "",
+         {:ok, %{rows: main_catalog}} <-
            Adapter.execute(
              connection,
-             "SELECT 1 FROM temp.sqlite_master WHERE name = ? COLLATE NOCASE",
-             [table],
+             "SELECT type,name,tbl_name,sql FROM main.sqlite_schema",
+             [],
              opts
            ),
-         {:ok, %{rows: [["table", ddl]]}} <-
+         {:ok, %{rows: temp_catalog}} <-
            Adapter.execute(
              connection,
-             "SELECT type, sql FROM main.sqlite_master WHERE name = ? COLLATE NOCASE",
-             [table],
+             "SELECT type,name,tbl_name,sql FROM temp.sqlite_schema",
+             [],
              opts
            ),
+         true <- catalog_rows?(main_catalog) and catalog_rows?(temp_catalog),
+         [] <- Enum.filter(temp_catalog, fn [_, name, _, _] -> same_name?(name, table) end),
+         [["table", actual_table, _, ddl]] <-
+           Enum.filter(main_catalog, fn [_, name, _, _] -> same_name?(name, table) end),
          true <- is_binary(ddl) and Regex.match?(~r/\ACREATE\s+TABLE\b/i, ddl),
          false <- replace_conflict?(ddl),
-         {:ok, %{rows: [["table", without_rowid]]}} <-
+         {:ok, %{rows: table_list}} <-
            Adapter.execute(
              connection,
-             "SELECT type,wr FROM pragma_table_list WHERE schema = 'main' AND name = ? COLLATE NOCASE",
-             [table],
+             "PRAGMA main.table_list",
+             [],
              opts
            ),
-         {:ok, %{rows: []}} <-
-           Adapter.execute(
-             connection,
-             "SELECT 1 FROM main.sqlite_master WHERE type = 'trigger' AND tbl_name = ? COLLATE NOCASE UNION ALL SELECT 1 FROM temp.sqlite_master WHERE type = 'trigger' AND tbl_name = ? COLLATE NOCASE",
-             [table, table],
-             opts
-           ),
+         [["main", _, "table", _, without_rowid, _]] <-
+           Enum.filter(table_list, fn
+             ["main", name, _, _, _, _] -> same_name?(name, actual_table)
+             _ -> false
+           end),
+         true <- without_rowid in [0, 1],
+         [] <-
+           Enum.filter(main_catalog ++ temp_catalog, fn [type, _, owner, _] ->
+             type == "trigger" and same_name?(owner, actual_table)
+           end),
          {:ok, %{rows: rows}} <-
            Adapter.execute(
              connection,
-             "PRAGMA main.table_xinfo(#{Adapter.quote_identifier(table)})",
+             "PRAGMA main.table_xinfo(#{Adapter.quote_identifier(actual_table)})",
              [],
              opts
            ),
          true <- rows != [] and Enum.all?(rows, &match?([_, _, _, _, _, _, 0], &1)),
-         {:ok, %{rows: primary_indexes}} <-
+         {:ok, %{rows: indexes}} <-
            Adapter.execute(
              connection,
-             "SELECT name FROM pragma_index_list(?, 'main') WHERE origin='pk'",
-             [table],
+             "PRAGMA main.index_list(#{Adapter.quote_identifier(actual_table)})",
+             [],
              opts
            ),
+         true <- Enum.all?(indexes, &match?([_, _, _, _, _], &1)),
+         primary_indexes = Enum.filter(indexes, fn [_, _, _, origin, _] -> origin == "pk" end),
          {:ok, collations} <- column_collations(ddl),
          true <-
            Enum.all?(rows, fn [_, name | _] -> Map.has_key?(collations, ascii_fold(name)) end) do
@@ -100,6 +110,7 @@ defmodule SelectoDBSQLite.InsertAdmission do
             declared_type: ascii_upcase(type),
             hidden: hidden,
             primary_key: pk > 0,
+            without_rowid: without_rowid,
             rowid_alias:
               without_rowid == 0 and primary_indexes == [] and primary_count == 1 and
                 pk == 1 and ascii_upcase(type) == "INTEGER",
@@ -111,6 +122,25 @@ defmodule SelectoDBSQLite.InsertAdmission do
     else
       _ -> denied(:query_rule_not_evaluable)
     end
+  end
+
+  # SQL collations and table-valued PRAGMA functions can be supplied by the
+  # connection's host. Catalog identity must follow SQLite's ASCII identifier
+  # rules in the host, with facts read through native PRAGMA statements.
+  defp same_name?(left, right) when is_binary(left) and is_binary(right),
+    do: ascii_fold(left) == ascii_fold(right)
+
+  defp same_name?(_, _), do: false
+
+  defp catalog_rows?(rows) do
+    Enum.all?(rows, fn
+      [type, name, owner, ddl] ->
+        is_binary(type) and is_binary(name) and is_binary(owner) and
+          (is_nil(ddl) or is_binary(ddl))
+
+      _ ->
+        false
+    end)
   end
 
   defp candidate_columns(command, required, schema, opts) do

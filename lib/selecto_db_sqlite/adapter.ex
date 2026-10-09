@@ -708,16 +708,9 @@ defmodule SelectoDBSQLite.Adapter do
     |> Enum.find(&(not MapSet.member?(names, &1)))
   end
 
-  defp physical_row_witness(connection, relation, schema, opts) do
-    table = relation |> to_string() |> String.replace_prefix("main.", "")
-
-    with {:ok, %{rows: [[without_rowid]]}} <-
-           execute(
-             connection,
-             "SELECT wr FROM pragma_table_list WHERE schema='main' AND name=? COLLATE NOCASE",
-             [table],
-             opts
-           ) do
+  defp physical_row_witness(_connection, _relation, schema, _opts) do
+    with [without_rowid] when without_rowid in [0, 1] <-
+           schema |> Map.values() |> Enum.map(&Map.get(&1, :without_rowid)) |> Enum.uniq() do
       names = schema |> Map.keys() |> MapSet.new(&String.downcase/1)
 
       fields =
@@ -737,6 +730,12 @@ defmodule SelectoDBSQLite.Adapter do
            Error.new(:validation, "physical candidate identity is unavailable",
              details: %{code: :required_data_rule_pending}
            )}
+    else
+      _ ->
+        {:error,
+         Error.new(:validation, "physical candidate identity is unavailable",
+           details: %{code: :required_data_rule_pending}
+         )}
     end
   end
 
