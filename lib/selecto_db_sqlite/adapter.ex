@@ -312,6 +312,7 @@ defmodule SelectoDBSQLite.Adapter do
       transactions: true,
       atomic_batch: true,
       mutation_expressions: true,
+      graph_domain_inference: true,
       write_graph:
         returning? and
           SelectoDBSQLite.RuntimeCapabilities.version_at_least?(version, {3, 37, 0}),
@@ -767,6 +768,9 @@ defmodule SelectoDBSQLite.Adapter do
         end
     end
   end
+
+  defp load_prepared_state(connection, {:write_graph_domain, domain}, opts),
+    do: SelectoDBSQLite.GraphDomainInference.infer(connection, domain, opts)
 
   defp load_prepared_state(connection, %RecordRequest{} = request, opts),
     do: load_record_state(connection, request, opts)

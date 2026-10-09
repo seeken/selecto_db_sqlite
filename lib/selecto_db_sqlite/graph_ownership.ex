@@ -67,7 +67,28 @@ defmodule SelectoDBSQLite.GraphOwnership do
     end
   end
 
-  def validate(connection, %Graph{nodes: nodes}, opts) do
+  def validate(connection, %Graph{nodes: nodes, metadata: metadata}, opts) do
+    with :ok <- inferred_edges(connection, Map.get(metadata, :catalog_inferred_edges), opts) do
+      validate_nodes(connection, nodes, opts)
+    end
+  end
+
+  def validate(_connection, _write, _opts), do: :ok
+
+  defp inferred_edges(_connection, nil, _opts), do: :ok
+
+  defp inferred_edges(connection, edges, opts) when is_list(edges) and length(edges) in 1..128 do
+    Enum.reduce_while(edges, :ok, fn edge, :ok ->
+      case SelectoDBSQLite.GraphDomainInference.require_declared_edge(connection, edge, opts) do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp inferred_edges(_, _, _), do: refusal()
+
+  defp validate_nodes(connection, nodes, opts) do
     by_id = Map.new(nodes, &{&1.id, &1})
 
     comparisons =
@@ -108,8 +129,6 @@ defmodule SelectoDBSQLite.GraphOwnership do
       error -> error
     end
   end
-
-  def validate(_connection, _write, _opts), do: :ok
 
   defp unique_parent?(connection, table, name, column, schema, opts) do
     with {:ok, %{rows: indexes}} <- pragma(connection, "index_list", table, opts),

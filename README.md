@@ -538,3 +538,10 @@ column `INTEGER PRIMARY KEY DESC` exception and `INT PRIMARY KEY`, which store
 genuine NULL. Unconsumed generated identity is retained as intent without
 fabricating a projected value. Omitted ordinary nullable fields without defaults
 are known SQL NULL; unproved default dependencies remain pending.
+Protected `graph_domain_inference` supplies creation-only native relationship
+metadata for the public Updato direct-write bridge. It requires declared insert
+grants, actual ordinary `main` tables, a NOT NULL single foreign key, and a
+unique parent with compatible key storage. It derives child cardinality from
+native uniqueness and rechecks the inferred edges before graph dispatch.
+`scripts/sqlite_direct_graph_inference_regression.exs` exercises in-memory
+graph creation, missing-proof refusals, scope isolation and late rollback.

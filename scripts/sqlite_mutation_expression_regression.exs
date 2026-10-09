@@ -141,6 +141,19 @@ defmodule SelectoDBSQLite.MutationExpressionRegression do
     assert {:ok, statement} = SelectoDBSQLite.WriteCompiler.compile(command, [])
     refute statement.text =~ "fallback'"
     assert "fallback' OR 1=1 --" in statement.params
+
+    simultaneous =
+      domain
+      |> put_in(["writes", "fields", "id", "updatable"], true)
+      |> SelectoUpdato.new()
+      |> SelectoUpdato.filter({"id", 3})
+      |> SelectoUpdato.update(%{
+        "id" => Mutation.increment("id", 10),
+        "tenant_id" => Mutation.add(Mutation.field("id"), Mutation.field("tenant_id"))
+      })
+
+    assert {:ok, _} = SelectoUpdato.execute(simultaneous, target)
+    assert rows(db) == [[1, 9, "fallback' OR 1=1 --"], [2, 7, "b"], [13, 11, "c"]]
   end
 
   test "source ownership, operand types, SQL escapes, and bounded trees fail before dispatch", %{
