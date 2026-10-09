@@ -31,6 +31,7 @@ defmodule SelectoDBSQLite.RuntimeCapabilities do
         recursive_cte: cte,
         rollup: cte,
         window_functions: windows,
+        lateral_join: windows,
         returning: returning,
         right_join: version_at_least?(version, {3, 39, 0}),
         full_join: version_at_least?(version, {3, 39, 0}),

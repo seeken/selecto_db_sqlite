@@ -285,6 +285,7 @@ defmodule SelectoDBSQLite.Adapter do
   @impl true
   def supports?(:json_rowset), do: true
   def supports?(:window_functions), do: true
+  def supports?(:lateral_join), do: true
   def supports?(:cte), do: true
   def supports?(:recursive_cte), do: true
   def supports?(:returning), do: true

@@ -3,6 +3,10 @@ defmodule SelectoDBSQLite.Dialect do
 
   @behaviour Selecto.DB.Dialect
 
+  @impl true
+  def render_lateral_subquery(fragment, selecto),
+    do: SelectoDBSQLite.Lateral.render(fragment, selecto)
+
   alias Selecto.Dialect.TextSearch.{Predicate, Rank}
   alias Selecto.Dialect.Collection.Operation, as: CollectionOperation
   alias Selecto.Dialect.DateTime.Operation, as: DateTimeOperation

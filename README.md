@@ -574,3 +574,18 @@ unique parent with compatible key storage. It derives child cardinality from
 native uniqueness and rechecks the inferred edges before graph dispatch.
 `scripts/sqlite_direct_graph_inference_regression.exs` exercises in-memory
 graph creation, missing-proof refusals, scope isolation and late rollback.
+
+## Correlated row queries
+
+SQLite lowers bounded LEFT and INNER lateral row queries to derived joins. A
+child LIMIT or OFFSET uses ROW_NUMBER partitioned by its correlation keys;
+stored field projections, output aliases, ordering, and bound predicates are
+retained. This supports named data members such as a latest child per parent.
+
+The child must be an ordinary, unjoined row query on the same connection, with
+positive top-level equality correlations to stored root fields. Connected
+compilation proves unshadowed main tables, stored columns, and matching native
+key affinities. Direct key projections preserve native collations. Aggregates,
+joined or nested children, non-equality or nested outer references, and other
+broader native LATERAL forms refuse before business query preparation. A
+compile-only query cannot provide the connected catalog proof.
