@@ -351,6 +351,33 @@ defmodule SelectoDBSQLite.Dialect do
 
   @impl true
   def render_text_search_predicate(%Predicate{} = predicate, selecto) do
+    if SelectoDBSQLite.FtsIndex.declared?(selecto),
+      do: render_external_predicate(predicate, selecto),
+      else: render_root_predicate(predicate, selecto)
+  end
+
+  defp render_external_predicate(predicate, selecto) do
+    with :ok <- simple_configuration(predicate.configuration),
+         {:ok, index} <- SelectoDBSQLite.FtsIndex.verify(selecto, predicate.fields),
+         {:ok, query} <- SelectoDBSQLite.FtsIndex.query(predicate.query, predicate.mode) do
+      {:ok,
+       [
+         "EXISTS (SELECT 1 FROM ",
+         main_index(index),
+         " WHERE ",
+         index_name(index),
+         " MATCH ",
+         SelectoDBSQLite.FtsIndex.match_query(index.fields, query),
+         " AND ",
+         index_name(index),
+         ".rowid = selecto_root.",
+         quoted(index.key),
+         ")"
+       ]}
+    end
+  end
+
+  defp render_root_predicate(predicate, selecto) do
     with :ok <- require_fields(predicate.fields),
          :ok <- validate_mode(predicate.mode),
          :ok <- require_fts_fields(predicate.fields),
@@ -371,6 +398,50 @@ defmodule SelectoDBSQLite.Dialect do
 
   @impl true
   def render_text_search_rank(%Rank{} = rank, selecto) do
+    if SelectoDBSQLite.FtsIndex.declared?(selecto),
+      do: render_external_rank(rank, selecto),
+      else: render_root_rank(rank, selecto)
+  end
+
+  defp render_external_rank(rank, selecto) do
+    with :ok <- simple_configuration(rank.configuration),
+         :ok <- external_weights(rank.weights),
+         {:ok, index} <- SelectoDBSQLite.FtsIndex.verify(selecto, rank.fields),
+         {:ok, query} <- SelectoDBSQLite.FtsIndex.query(rank.query, rank.mode) do
+      expression = [
+        "(SELECT -bm25(",
+        index_name(index),
+        ") FROM ",
+        main_index(index),
+        " WHERE ",
+        index_name(index),
+        " MATCH ",
+        SelectoDBSQLite.FtsIndex.match_query(index.fields, query),
+        " AND ",
+        index_name(index),
+        ".rowid = selecto_root.",
+        quoted(index.key),
+        ")"
+      ]
+
+      {:ok, {:field, {:custom_sql, expression, %{}}, rank.alias}}
+    end
+  end
+
+  defp main_index(index), do: ["main.", index_name(index)]
+  defp index_name(index), do: quoted(index.table)
+  defp quoted(identifier), do: SelectoDBSQLite.Adapter.quote_identifier(identifier)
+  defp simple_configuration(config) when config in [nil, "simple"], do: :ok
+
+  defp simple_configuration(_config),
+    do: error("SQLite FTS5 requires simple search configuration")
+
+  defp external_weights([]), do: :ok
+
+  defp external_weights(_weights),
+    do: error("SQLite external FTS5 rank does not accept custom weights")
+
+  defp render_root_rank(rank, selecto) do
     with :ok <- require_rank_fields(rank.fields),
          :ok <- validate_weights(rank.weights),
          :ok <- ensure_runtime_available(selecto),

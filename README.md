@@ -322,6 +322,28 @@ articles_fts_selecto
 Configure `articles_fts_selecto` with a domain whose
 `source.source_table` is `"articles_fts"`.
 
+Governed co-domain lookup can instead keep an ordinary content table as its
+root. The host creates and maintains a same-main-schema external-content index:
+
+```sql
+CREATE VIRTUAL TABLE people_fts USING fts5(
+  name, content='people', content_rowid='id'
+);
+INSERT INTO people_fts(people_fts) VALUES('rebuild');
+```
+
+Declare `source.fts5_index: %{table: "people_fts", key: :id}` in the target
+domain and use the public `Selecto.CoDomain.lookup/5` API. The adapter correlates
+index `rowid` to the ordinary root key, binds MATCH text and ranks by descending
+negative `bm25`. It requires a connected catalog proof, one native `INTEGER`
+rowid-alias primary key, public stored text-affinity search columns, `unicode61` tokenization and
+`full` detail. Missing or mismatched indexes, TEMP shadows and unindexed search
+columns refuse. The bounded DDL parser accepts ordinary quoted identifiers and
+the `content`, `content_rowid`, `tokenize` and `detail` options; other index options
+refuse. Required, trusted tenant, named and request scopes stay in the root query.
+The host owns index freshness and maintenance; Selecto does not invent an index
+declaration or update index rows.
+
 ### Attach Database
 ```elixir
 {:ok, _} = Selecto.DB.SQLite.execute(

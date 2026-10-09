@@ -47,10 +47,12 @@ defmodule SelectoDBSQLite.Adapter do
     %{
       feature: :text_search,
       supported?: true,
-      modes: [:websearch, :boolean, :phrase],
+      modes: [:plain, :prefix, :websearch, :boolean, :phrase],
+      governed_lookup?: true,
       default_mode: :websearch,
       document_type: :text_search_document,
-      help: "SQLite FTS5 search with web-style, boolean, and phrase query modes."
+      help:
+        "SQLite FTS5 search, including governed lookup through a verified external-content index."
     }
   end
 
