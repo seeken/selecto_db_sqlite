@@ -3,6 +3,24 @@ defmodule SelectoDBSQLite.ConnectionOptionsTest do
 
   alias SelectoDBSQLite.Adapter
 
+  test "declared Exqlite range admits the supported explicit open flags" do
+    {:exqlite, requirement} = List.keyfind(Mix.Project.config()[:deps], :exqlite, 0)
+
+    refute Version.match?("0.35.0", requirement)
+    refute Version.match?("0.37.0", requirement)
+    assert Version.match?("0.39.0", requirement)
+    assert Version.match?(to_string(Application.spec(:exqlite, :vsn)), requirement)
+
+    assert {:ok, connection} =
+             Adapter.connect(database: ":memory:", temp_store: :memory)
+
+    on_exit(fn -> Adapter.disconnect(connection) end)
+
+    assert {:ok, %{rows: [[2]]}} = Adapter.execute(connection, "PRAGMA temp_store", [], [])
+    assert {:ok, %{rows: rows}} = Adapter.execute(connection, "PRAGMA database_list", [], [])
+    assert Enum.all?(rows, fn [_sequence, _name, file] -> file == "" end)
+  end
+
   test "applies documented settings to an in-memory database" do
     assert {:ok, connection} =
              Adapter.connect(%{

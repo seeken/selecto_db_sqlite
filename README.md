@@ -11,10 +11,14 @@ def deps do
   [
     {:selecto, ">= 0.5.0 and < 0.6.0"},
     {:selecto_db_sqlite, "~> 0.5"},
-    {:exqlite, "~> 0.13"}
+    {:exqlite, "~> 0.39"}
   ]
 end
 ```
+
+Exqlite 0.39 or newer is required for explicit SQLite open flags, including
+the adapter's default `[:readwrite, :create]` mode. Older Exqlite versions can
+reject this mode before opening a connection.
 
 ## Configuration
 

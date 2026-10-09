@@ -29,7 +29,7 @@ defmodule Selecto.DB.SQLite.MixProject do
   defp deps do
     [
       selecto_dep(),
-      {:exqlite, "~> 0.13"},
+      {:exqlite, "~> 0.39"},
       {:jason, "~> 1.4"},
       {:elixir_make, "~> 0.10", runtime: false},
       {:ex_doc, "~> 0.27", only: :dev, runtime: false}
