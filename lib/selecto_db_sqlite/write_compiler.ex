@@ -194,6 +194,9 @@ defmodule SelectoDBSQLite.WriteCompiler do
   @doc false
   def compile_value(value, opts \\ [], offset \\ 0)
 
+  def compile_value({:mutation, ast}, opts, offset),
+    do: SelectoDBSQLite.Mutation.compile(ast, opts, offset)
+
   def compile_value({:literal, {:system, :now}}, _opts, _offset),
     do: {:ok, %{text: "CURRENT_TIMESTAMP", params: []}}
 
@@ -419,7 +422,14 @@ defmodule SelectoDBSQLite.WriteCompiler do
   defp assignment_parameter_count(assignments),
     do: assignments |> Enum.flat_map(& &1.params) |> length()
 
-  defp with_field_types(opts, _metadata), do: opts
+  defp with_field_types(opts, metadata) do
+    types =
+      Map.get(metadata, :field_types, %{})
+      |> Map.new(fn {field, type} -> {to_string(field), type} end)
+
+    Keyword.put(opts, :mutation_field_types, types)
+  end
+
   defp cast_assignment(text, _field, _opts), do: text
 
   defp parameter(value, _offset), do: {:ok, %{text: "?", params: [value]}}

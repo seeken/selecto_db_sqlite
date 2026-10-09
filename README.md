@@ -91,6 +91,16 @@ unchanged. `execute_write_unsafe/3` and `execute_prepared_write_unsafe/3` skip
 that check; it exists for trusted tooling and this package's own tests, never
 for application code.
 
+The adapter reports `mutation_expressions` in its write capabilities. Closed
+Updato arithmetic/coalesce trees bind literals, quote governed root references,
+and retain native SQLite NULL and division behavior. Typed NULL is compiled as
+a bound cast. Prospective Rules use the same expression compiler against
+protected prior row values before ordinary column-affinity projection; DML
+retains the original expression. Trees, types and operations remain bounded by
+the governed Updato compiler. Run the public in-memory regression at
+`scripts/sqlite_mutation_expression_regression.exs` with the selected Updato
+and certification fixture modules on the code path.
+
 ## Type Mappings
 
 | Elixir Type | SQLite Type | Storage |

@@ -311,6 +311,7 @@ defmodule SelectoDBSQLite.Adapter do
       generated_keys: if(returning?, do: :returning, else: false),
       transactions: true,
       atomic_batch: true,
+      mutation_expressions: true,
       write_graph:
         returning? and
           SelectoDBSQLite.RuntimeCapabilities.version_at_least?(version, {3, 37, 0}),

@@ -13,6 +13,7 @@ defmodule SelectoDBSQLite.RuleCandidate do
          {:ok, table} <- table(request.relation),
          {:ok, schema} <- InsertAdmission.storage_schema(connection, table, opts),
          {:ok, request} <- available_dependencies(request, schema),
+         {:ok, request} <- SelectoDBSQLite.Mutation.resolve(connection, request, opts),
          {:ok, fields, definitions, params} <- columns(request, schema) do
       project_row(connection, request, fields, definitions, params, opts)
     else
