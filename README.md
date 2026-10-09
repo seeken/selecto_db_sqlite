@@ -528,6 +528,15 @@ physical catalog proof also applies to owned-schema comparison and candidate
 snapshot loading. Ordinary SELECT queries remain available. This is a conservative
 storage refusal, not emulation of arbitrary replacement effects.
 
+INSERT, UPDATE and upsert targets also refuse actual schema
+`ON CONFLICT ROLLBACK` policies before business mutation. A constraint failure
+under that policy can discard the caller's whole transaction and its savepoints;
+the adapter's owned savepoint cannot contain it. Whole batch and graph admission
+checks every mutating target, including a later INSERT after a DELETE of the
+same table. DELETE and ordinary source/schema reads remain available on tables
+whose only unsafe conflict policy is ROLLBACK. Quoted/default/comment text containing
+the policy words does not activate this refusal.
+
 Generated-key graphs and protected child snapshots validate the physical parent
 and child ownership columns before hydration or graph DML. SQLite foreign keys
 compare with the parent's affinity and collation, while child predicates compare

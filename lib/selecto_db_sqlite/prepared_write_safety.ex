@@ -25,10 +25,13 @@ defmodule SelectoDBSQLite.PreparedWriteSafety do
   defp ordinary_targets(connection, commands, opts) do
     commands
     |> Enum.filter(&(&1.operation in [:insert, :update, :upsert, :delete]))
-    |> Enum.uniq_by(&ascii_fold(&1.relation))
+    # A DELETE on a table must not hide a later constraint-bearing mutation of
+    # that same table. Only INSERT/UPDATE/upsert can invoke ROLLBACK policies.
+    |> Enum.uniq_by(&{ascii_fold(&1.relation), &1.operation in [:insert, :update, :upsert]})
     |> Enum.reduce_while(:ok, fn command, :ok ->
       with {:ok, table} <- main_table(command.relation),
-           {:ok, _schema} <- InsertAdmission.storage_schema(connection, table, opts) do
+           {:ok, _schema} <-
+             InsertAdmission.storage_schema(connection, table, opts, command.operation) do
         {:cont, :ok}
       else
         {:error, %Error{} = error} ->

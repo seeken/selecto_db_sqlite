@@ -10,7 +10,7 @@ defmodule SelectoDBSQLite.InsertAdmission do
       ) do
     with %{storage_backend: :sqlite, predicate: predicate} <- admission,
          {:ok, table} <- main_table(command.relation),
-         {:ok, schema} <- storage_schema(connection, table, opts),
+         {:ok, schema} <- storage_schema(connection, table, opts, :insert),
          {:ok, fields} <- predicate_fields(predicate),
          {:ok, candidate} <- candidate_columns(command, fields, schema, opts),
          {:ok, guard} <-
@@ -42,7 +42,7 @@ defmodule SelectoDBSQLite.InsertAdmission do
   end
 
   @doc false
-  def storage_schema(connection, table, opts) do
+  def storage_schema(connection, table, opts, operation \\ nil) do
     with true <- is_binary(table) and table != "",
          {:ok, %{rows: main_catalog}} <-
            Adapter.execute(
@@ -63,7 +63,7 @@ defmodule SelectoDBSQLite.InsertAdmission do
          [["table", actual_table, _, ddl]] <-
            Enum.filter(main_catalog, fn [_, name, _, _] -> same_name?(name, table) end),
          true <- is_binary(ddl) and Regex.match?(~r/\ACREATE\s+TABLE\b/i, ddl),
-         false <- replace_conflict?(ddl),
+         false <- unsafe_conflict?(ddl, operation),
          {:ok, %{rows: table_list}} <-
            Adapter.execute(
              connection,
@@ -322,13 +322,20 @@ defmodule SelectoDBSQLite.InsertAdmission do
   # A schema conflict policy applies even to a plain INSERT, UPDATE or upsert.
   # REPLACE can delete a conflicting row (including unrelated FK descendants),
   # or replace submitted NOT NULL values with defaults outside the proved row.
+  # ROLLBACK on INSERT/UPDATE/upsert can destroy the caller's entire transaction,
+  # including savepoints and work outside this write. DELETE and read anchors do
+  # not invoke these constraint policies. REPLACE retains its existing refusal.
   # Quoted tokens remain distinct; comments may separate real SQL keywords.
-  defp replace_conflict?(ddl) do
+  defp unsafe_conflict?(ddl, operation) do
     ddl
     |> ddl_tokens()
     |> Enum.chunk_every(3, 1, :discard)
     |> Enum.any?(fn tokens ->
-      Enum.map(tokens, &ascii_upcase/1) == ["ON", "CONFLICT", "REPLACE"]
+      case Enum.map(tokens, &ascii_upcase/1) do
+        ["ON", "CONFLICT", "REPLACE"] -> true
+        ["ON", "CONFLICT", "ROLLBACK"] -> operation in [:insert, :update, :upsert]
+        _ -> false
+      end
     end)
   end
 
