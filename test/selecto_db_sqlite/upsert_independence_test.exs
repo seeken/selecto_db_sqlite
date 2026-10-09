@@ -133,6 +133,208 @@ defmodule SelectoDBSQLite.UpsertIndependenceTest do
     assert rows(db, "SELECT * FROM clock_ranges") == []
   end
 
+  test "an index-arbiter insert cannot guess its generated rowid for another UPSERT", %{db: db} do
+    name_table(db, false)
+
+    name_refusal(db, [
+      {:protected, name_command(%{subject: "new", start: 5, finish: 6}, [:subject], false)},
+      name_command(%{id: 3, finish: 0}, [:id], false)
+    ])
+  end
+
+  test "the other arbiter includes consumed insertion defaults and updated keys", %{db: db} do
+    name_table(db, true)
+
+    for protected <- [
+          name_command(%{subject: "new", start: 5, finish: 6}, [:subject], true),
+          name_command(%{subject: "one", code: "generated", finish: 6}, [:subject], true, [
+            :code,
+            :finish
+          ])
+        ] do
+      name_refusal(db, [
+        {:protected, protected},
+        name_command(%{code: "generated", subject: "other", finish: 0}, [:code], true)
+      ])
+    end
+  end
+
+  test "known disjoint other-index keys permit genuine mixed UPSERTs", %{db: db} do
+    name_table(db, true)
+
+    assert {:ok, results} =
+             name_prepared(db, [
+               {:protected,
+                name_command(%{subject: "new", start: 5, finish: 6}, [:subject], true)},
+               name_command(%{code: "other-code", subject: "other", finish: 0}, [:code], true)
+             ])
+
+    assert length(results) == 2
+
+    assert rows(db, "SELECT * FROM names ORDER BY id") == [
+             [1, "one", "one-code", 5, 7],
+             [2, "two", "two-code", 10, 11],
+             [3, "new", "generated", 5, 6],
+             [4, "other", "other-code", nil, 0]
+           ]
+  end
+
+  test "an explicit rowid proves independence under a different rowid arbiter", %{db: db} do
+    name_table(db, false)
+
+    assert {:ok, results} =
+             name_prepared(db, [
+               {:protected,
+                name_command(%{id: 3, subject: "new", start: 5, finish: 6}, [:subject], false)},
+               name_command(%{id: 4, finish: 0}, [:id], false)
+             ])
+
+    assert length(results) == 2
+
+    assert rows(db, "SELECT * FROM names ORDER BY id") == [
+             [1, "one", 5, 7],
+             [2, "two", 10, 11],
+             [3, "new", 5, 6],
+             [4, nil, nil, 0]
+           ]
+  end
+
+  test "two protected index-arbiter inserts retain independent generated rowids", %{db: db} do
+    name_table(db, false)
+
+    assert {:ok, results} =
+             name_prepared(db, [
+               {:protected,
+                name_command(%{subject: "new-a", start: 5, finish: 6}, [:subject], false)},
+               {:protected,
+                name_command(%{subject: "new-b", start: 10, finish: 11}, [:subject], false)}
+             ])
+
+    assert length(results) == 2
+
+    assert rows(db, "SELECT * FROM names ORDER BY id") == [
+             [1, "one", 5, 7],
+             [2, "two", 10, 11],
+             [3, "new-a", 5, 6],
+             [4, "new-b", 10, 11]
+           ]
+  end
+
+  test "an unprovable default consumed only by the other arbiter remains pending", %{db: db} do
+    name_table(db, true, "CURRENT_TIMESTAMP")
+
+    name_refusal(db, [
+      {:protected, name_command(%{subject: "new", start: 5, finish: 6}, [:subject], true)},
+      name_command(%{code: "other-code", subject: "other", finish: 0}, [:code], true)
+    ])
+  end
+
+  defp name_table(db, code?, default \\ "'generated'") do
+    if code? do
+      sql(
+        db,
+        "CREATE TABLE names(id INTEGER PRIMARY KEY,subject TEXT UNIQUE,code TEXT UNIQUE DEFAULT #{default},start INTEGER,finish INTEGER)"
+      )
+
+      sql(db, "INSERT INTO names VALUES(1,'one','one-code',5,7),(2,'two','two-code',10,11)")
+    else
+      sql(
+        db,
+        "CREATE TABLE names(id INTEGER PRIMARY KEY,subject TEXT UNIQUE,start INTEGER,finish INTEGER)"
+      )
+
+      sql(db, "INSERT INTO names VALUES(1,'one',5,7),(2,'two',10,11)")
+    end
+  end
+
+  defp name_command(values, target, code?, mask \\ [:finish]) do
+    types = %{id: :integer, subject: :string, start: :integer, finish: :integer}
+    types = if code?, do: Map.put(types, :code, :string), else: types
+
+    {:ok, command} =
+      Command.new(%{
+        operation: :upsert,
+        relation: "names",
+        assignments:
+          Enum.map(values, fn {field, value} -> %{field: field, value: {:literal, value}} end),
+        expected_cardinality: :many,
+        required_capabilities: [:upsert],
+        metadata: %{field_types: types, conflict_target: target, upsert_update_fields: mask}
+      })
+
+    command
+  end
+
+  defp name_prepared(db, operations) do
+    Adapter.execute_prepared_write_unsafe(db, fn loader ->
+      commands =
+        Enum.map(operations, fn
+          {:protected, command} ->
+            command = %{command | required_capabilities: [:upsert, :protected_upsert_candidates]}
+            subject = make_ref()
+
+            request = %UpsertCandidateRequest{
+              command: command,
+              field_types: command.metadata.field_types,
+              dependencies: [:start, :finish],
+              subject: subject
+            }
+
+            {:ok, state} = loader.(request)
+            assert state.complete? and state.protection == :locked
+            assert is_integer(state.values["finish"]) and is_integer(state.values["start"])
+            assert state.values["finish"] > state.values["start"]
+
+            %{
+              command
+              | metadata:
+                  Map.merge(command.metadata, %{
+                    protected_upsert_receipt: state.receipt,
+                    protected_upsert_subject: subject
+                  })
+            }
+
+          command ->
+            command
+        end)
+
+      {:ok, batch} = Batch.new(commands)
+      {:ok, batch, %{}}
+    end)
+  end
+
+  defp name_refusal(db, operations) do
+    sql(db, "BEGIN")
+    sql(db, "INSERT INTO caller VALUES(11)")
+    sql(db, "SAVEPOINT original_name_caller")
+    before = rows(db, "SELECT * FROM names ORDER BY id")
+    :ok = Exqlite.Sqlite3.set_update_hook(db, self())
+    drain_hooks()
+
+    {:ok, prefix} =
+      Command.new(%{
+        operation: :insert,
+        relation: "caller",
+        assignments: [%{field: :id, value: {:literal, 12}}],
+        metadata: %{field_types: %{id: :integer}}
+      })
+
+    assert {:error, %Error{details: %{code: :required_data_rule_pending}}} =
+             name_prepared(db, [prefix | operations])
+
+    assert rows(db, "SELECT * FROM names ORDER BY id") == before
+    assert rows(db, "SELECT * FROM caller ORDER BY id") == [[10], [11]]
+    refute_business_hook()
+    assert {:ok, :transaction} = Exqlite.Sqlite3.transaction_status(db)
+    sql(db, "ROLLBACK TO original_name_caller")
+    sql(db, "RELEASE original_name_caller")
+    assert rows(db, "SELECT * FROM names ORDER BY id") == before
+    assert rows(db, "SELECT * FROM caller ORDER BY id") == [[10], [11]]
+    sql(db, "ROLLBACK")
+    assert rows(db, "SELECT * FROM caller") == [[10]]
+    drain_hooks()
+  end
+
   defp eq(field, value), do: {:eq, {:field, field}, {:literal, value}}
 
   defp protected(values, table \\ "ranges"),

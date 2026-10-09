@@ -63,7 +63,41 @@ defmodule SelectoDBSQLite.UpsertIndependence do
            ),
          true <- entry.physical_id == nil or prospective.physical_id != entry.physical_id,
          :ok <- insertion_disjoint(connection, entry, command, opts),
+         :ok <- other_arbiter_disjoint(connection, entry, prospective, opts),
          :ok <- changed_key_disjoint(connection, entry, command, prospective.mask, opts) do
+      :ok
+    else
+      _ -> pending()
+    end
+  end
+
+  # Different insertion keys under the protected arbiter do not prevent the
+  # ordinary UPSERT from matching the protected row through its own arbiter.
+  # Resolve consumed defaults through native insertion affinity; an omitted
+  # generated rowid remains unknown rather than being treated as SQL NULL.
+  defp other_arbiter_disjoint(connection, entry, prospective, opts) do
+    fields = Enum.map(prospective.arbiter.fields, &elem(&1, 0))
+
+    with {:ok, projected} <-
+           UpsertCandidate.project_values(
+             connection,
+             if(entry.branch == :insert, do: :insert, else: :update),
+             entry.command.relation,
+             entry.values,
+             entry.types,
+             fields,
+             context(entry, opts),
+             opts
+           ),
+         {:ok, keys} <- field_values(projected, fields),
+         {:ok, false} <-
+           UpsertCandidate.keys_equal(
+             connection,
+             prospective.arbiter,
+             keys,
+             prospective.keys,
+             opts
+           ) do
       :ok
     else
       _ -> pending()
