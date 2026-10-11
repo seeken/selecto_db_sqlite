@@ -794,11 +794,15 @@ defmodule SelectoDBSQLite.Adapter do
   defp load_prepared_state(connection, {:write_graph_domain, domain}, opts),
     do: SelectoDBSQLite.GraphDomainInference.infer(connection, domain, opts)
 
-  defp load_prepared_state(connection, %RecordRequest{} = request, opts),
-    do: load_record_state(connection, request, opts)
+  defp load_prepared_state(connection, %RecordRequest{} = request, opts) do
+    with :ok <- require_committed_reads(connection, opts),
+         do: load_record_state(connection, request, opts)
+  end
 
-  defp load_prepared_state(connection, %CandidateRequest{} = request, opts),
-    do: load_candidate_state(connection, request, opts)
+  defp load_prepared_state(connection, %CandidateRequest{} = request, opts) do
+    with :ok <- require_committed_reads(connection, opts),
+         do: load_candidate_state(connection, request, opts)
+  end
 
   defp load_prepared_state(connection, %Selecto.Write.RuleCandidateRequest{} = request, opts),
     do: SelectoDBSQLite.RuleCandidate.project(connection, request, opts)
@@ -812,6 +816,30 @@ defmodule SelectoDBSQLite.Adapter do
        Error.new(:invalid_preparation, "unsupported prepared-state request",
          details: %{actual: request}
        )}
+
+  # A :locked witness also requires that the governing connection reads only
+  # committed data. In a caller-owned DEFERRED transaction the lock is the write
+  # transaction SQLite opens for the adapter's nested BEGIN IMMEDIATE before it
+  # refuses that BEGIN. Shared-cache `read_uncommitted` skips table read-locks,
+  # leaving that side effect as the only protection, so such a connection is
+  # refused defensively rather than given a protected candidate.
+  @doc false
+  def require_committed_reads(connection, opts \\ []) do
+    case execute(connection, "PRAGMA read_uncommitted", [], opts) do
+      {:ok, %{rows: [[0]]}} ->
+        :ok
+
+      _ ->
+        {:error,
+         Error.new(:validation, "SQLite cannot protect candidate state on this connection",
+           details: %{
+             code: :required_data_rule_pending,
+             adapter: :sqlite,
+             isolation: :read_uncommitted
+           }
+         )}
+    end
+  end
 
   defp preview_graph(%Graph{} = graph, opts) do
     graph.nodes

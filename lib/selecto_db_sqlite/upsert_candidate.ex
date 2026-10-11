@@ -19,6 +19,7 @@ defmodule SelectoDBSQLite.UpsertCandidate do
     opts = Keyword.put(opts, :upsert_relation, request.command.relation)
 
     with {:ok, tracker} <- tracker(opts),
+         :ok <- Adapter.require_committed_reads(connection, opts),
          :ok <- valid_request(request),
          {:ok, previous} <- prior(request, tracker),
          {:ok, facts} <- schema_facts(connection, request, opts),
@@ -667,6 +668,7 @@ defmodule SelectoDBSQLite.UpsertCandidate do
 
         receipt ->
           with {:ok, tracker} <- tracker(opts),
+               :ok <- Adapter.require_committed_reads(connection, opts),
                registry = registry(tracker),
                {:ok, entry} <- Map.fetch(registry.receipts, receipt),
                true <- entry.connection === connection and entry.command === strip(command),
@@ -680,6 +682,7 @@ defmodule SelectoDBSQLite.UpsertCandidate do
                :ok <- same_selection(entry, selection) do
             {:cont, {:ok, entries ++ [entry]}}
           else
+            {:error, %Error{}} = error -> {:halt, error}
             _ -> {:halt, pending()}
           end
       end
