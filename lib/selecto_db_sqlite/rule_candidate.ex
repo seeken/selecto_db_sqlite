@@ -158,7 +158,7 @@ defmodule SelectoDBSQLite.RuleCandidate do
       )
 
     savepoint =
-      "selecto_rule_projection_" <> Integer.to_string(System.unique_integer([:positive]))
+      "selecto_rule_projection_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
 
     with {:ok, _} <- Adapter.execute(connection, "SAVEPOINT " <> savepoint, [], opts) do
       result =

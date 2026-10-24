@@ -1208,7 +1208,7 @@ defmodule SelectoDBSQLite.Adapter do
   defp nested_begin_error?(_reason), do: false
 
   defp begin_savepoint(connection, depth) do
-    name = "selecto_sp_#{depth}_#{System.unique_integer([:positive])}"
+    name = "selecto_sp_#{depth}_#{Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)}"
 
     case execute(connection, "SAVEPOINT #{name}", [], []) do
       {:ok, _} -> {:ok, {:savepoint, name}}

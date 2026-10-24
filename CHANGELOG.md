@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Transaction and rule-projection savepoint names carry a random nonce
+  instead of a counter, so a host savepoint can never share one (w3exp5
+  item 20).
+
 - TW-09 post-image: a guarded INSERT/UPDATE/UPSERT (`metadata.post_image`)
   returns its rows' keys and re-reads them under the scope in the same
   transaction; a row outside it rolls back with `query_rule_violation`. The
