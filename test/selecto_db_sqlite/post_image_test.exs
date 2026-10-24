@@ -159,6 +159,26 @@ defmodule SelectoDBSQLite.PostImageTest do
     assert stored(c) == [[1, "T1", "S1", "a"]]
   end
 
+  test "inside the caller's transaction a refused write undoes its own DML", %{connection: c} do
+    # w3exrev16 item 18: the caller ignores the refusal and commits, through
+    # Adapter.transaction and through a raw BEGIN.
+    assert {:ok, {refused, applied}} =
+             Adapter.transaction(c, fn tx ->
+               {:ok,
+                {Adapter.execute_write_unsafe(tx, update([{"site", "S9"}], site("S1")), []),
+                 Adapter.execute_write_unsafe(tx, update([{"name", "u"}], site("S1")), [])}}
+             end)
+
+    assert violation?(refused)
+    assert {:ok, %{affected_rows: 1}} = applied
+    assert stored(c) == [[1, "T1", "S1", "u"]]
+
+    exec!(c, "BEGIN")
+    assert violation?(Adapter.execute_write_unsafe(c, update([{"site", "S9"}], site("S1")), []))
+    exec!(c, "COMMIT")
+    assert stored(c) == [[1, "T1", "S1", "u"]]
+  end
+
   test "in-scope writes apply; results keep their shape", %{connection: c} do
     assert {:ok, %{affected_rows: 1, rows: []}} =
              Adapter.execute_write_unsafe(c, update([{"name", "u"}], site("S1")), [])
