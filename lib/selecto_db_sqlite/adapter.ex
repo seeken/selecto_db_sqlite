@@ -972,7 +972,7 @@ defmodule SelectoDBSQLite.Adapter do
     with :ok <- SelectoDBSQLite.UpsertCandidate.validate_command(connection, command, opts),
          :ok <- SelectoDBSQLite.InsertAdmission.enforce(connection, command, opts),
          {:ok, statement} <- WriteCompiler.compile(command, opts),
-         {:ok, query_result} <- execute(connection, statement.text, statement.params, opts),
+         {:ok, query_result} <- execute_guarded_statement(connection, command, statement, opts),
          {:ok, affected_rows} <- enforce_cardinality(command, query_result) do
       {:ok,
        %Result{
@@ -984,6 +984,30 @@ defmodule SelectoDBSQLite.Adapter do
     else
       {:error, %Error{} = error} -> {:error, error}
       {:error, reason} -> {:error, write_error(:execution_failed, reason)}
+    end
+  end
+
+  # A guarded INSERT/UPDATE/UPSERT (TW-09 post-image) returns its rows'
+  # keys and is re-read by them after the statement (SelectoDBSQLite.PostImage).
+  defp execute_guarded_statement(connection, command, statement, opts) do
+    case SelectoDBSQLite.PostImage.prepare(command) do
+      {:plain, _command} ->
+        execute(connection, statement.text, statement.params, opts)
+
+      {:post_image, command} ->
+        text = SelectoDBSQLite.PostImage.returning(statement.text, command)
+
+        with {:ok, query_result} <- execute(connection, text, statement.params, opts),
+             {query_result, keys} = SelectoDBSQLite.PostImage.split_result(query_result, command),
+             :ok <-
+               SelectoDBSQLite.PostImage.verify(
+                 command,
+                 keys,
+                 &execute(connection, &1, &2, opts),
+                 opts
+               ) do
+          {:ok, query_result}
+        end
     end
   end
 

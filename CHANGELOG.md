@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- TW-09 post-image: a guarded INSERT/UPDATE/UPSERT (`metadata.post_image`)
+  returns its rows' keys and re-reads them under the scope in the same
+  transaction; a row outside it rolls back with `query_rule_violation`. The
+  relation resolves as SQLite resolves the write (temp, then main; a view is
+  refused) and the key must be the real rowid, the INTEGER PRIMARY KEY or a
+  non-partial unique index over NOT NULL columns, else
+  `query_rule_not_evaluable`.
+
 - Apply incoming FK effect admission to connected previews and ordinary writes
   as well as final prepared writes. Refuse automatic DELETE effects unless
   actual scoped native reads prove no references. Preflight every batch/graph
