@@ -14,6 +14,8 @@ defmodule SelectoDBSQLite.Lateral do
   @set_keys [
     :selected,
     :filtered,
+    # Provenance only (R24): which of `filtered` are host scope.
+    :host_filtered,
     :required_filters,
     :order_by,
     :group_by,
@@ -62,6 +64,10 @@ defmodule SelectoDBSQLite.Lateral do
           is_nil(value) or (is_integer(value) and value >= 0 and value <= 2_147_483_647)
         end) and map_size(Selecto.joins(child)) == 0 and
         identifier?(Selecto.source_table(child)) and
+        Enum.all?(
+          List.wrap(Map.get(child.set, :host_filtered)),
+          &(&1 in List.wrap(Map.get(child.set, :filtered)))
+        ) and
         Enum.all?(Map.get(child.domain, :required_filters, []), &predicate?(child, &1, 0))
 
     if valid, do: :ok, else: error("SQLite lateral child must be an ordinary unjoined row query")
