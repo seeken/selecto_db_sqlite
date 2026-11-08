@@ -74,18 +74,22 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
   closed when `RETURNING` is unavailable
 - `EXPLAIN QUERY PLAN` provides plan descriptions; SQLite has no native
   `EXPLAIN ANALYZE` or PostgreSQL plan-cost/timing fields.
-- ⚠️ SQLite shows a CTE body every CTE of its `WITH`, the ones defined after it
-  included, with or without `RECURSIVE`. Selecto holds one rule on every
-  adapter: a name a query reads is a reference to a CTE or VALUES list where the
-  statement makes it one (a domain rooted on a list its own query defines, a CTE
-  body's domain rooted on a list visible where the body sits, an ad-hoc join
-  naming a visible list) and a table everywhere else, filter subqueries and
-  declared non-association joins included. A table named like a list defined
-  anywhere in the statement refuses (`query_rule_not_evaluable`,
+- ⚠️ SQLite shows a CTE body every CTE of its `WITH`, the ones defined after
+  it included, with or without `RECURSIVE`. Selecto holds one rule on every
+  adapter. A name a query reads is a reference to a CTE or VALUES list at two
+  places only: a query's root, when its domain declares no `source_schema` and
+  the query defines a list of that name itself (or, for a CTE body, one
+  visible where the body sits), which is how to select from a CTE; and an
+  ad-hoc join naming a visible list. Every other name is a table, including
+  the tables of filter, CASE and other embedded subqueries, joined schemas and
+  declared non-association joins. A table named like a list defined anywhere
+  in the statement refuses (`query_rule_not_evaluable`,
   `reason: :cte_name_collision`), and one name defined twice with different
-  lists refuses (`reason: :cte_name_redefined`) unless the two sit in different
-  set members (each compiles as a derived table with its own WITH); rename the
-  CTE. Selecto's generated CTEs are named `__selecto_...` by their content.
+  lists refuses (`reason: :cte_name_redefined`) unless the two sit in
+  different set members. A raw CTE counts by the name its text starts with. A
+  root named like one of its own lists reads the list here, even where a table
+  of that name exists. Selecto's generated CTEs are named `__selecto_...` by
+  their content.
 
 The available JSON, FTS5, math, and newer SQL features depend on the connected
 SQLite library's version and build. Coarse `supports?/1` flags describe adapter
