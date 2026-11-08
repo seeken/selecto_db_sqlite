@@ -2,12 +2,15 @@
 
 ## Unreleased
 
-- A CTE or VALUES name that is also a relation the statement reads anywhere
-  refuses (`cte_name_collision`), and one defined twice with different lists
-  refuses (`cte_name_redefined`), Selecto's rule on every adapter. SQLite shows
-  a body the later CTEs of its `WITH` from any position in it, so a body, its
-  subquery or its nested body read a later CTE's rows for a table, and a
-  generated closure CTE read a user CTE named like its closure table.
+- A table read anywhere in the statement (filter subqueries and declared
+  non-association joins included) named like a CTE or VALUES list defined
+  anywhere refuses (`cte_name_collision`), and one name defined twice with
+  different lists refuses (`cte_name_redefined`) unless the two sit in different
+  set members: Selecto's rule on every adapter. A domain rooted on a CTE reads
+  the CTE. SQLite shows a body the later CTEs of its `WITH` from any position in
+  it, so a body, its subquery or its nested body read a later CTE's rows for a
+  table, and a generated closure CTE read a user CTE named like its closure
+  table.
 - Transaction and rule-projection savepoint names carry a random nonce
   instead of a counter, so a host savepoint can never share one (w3exp5
   item 20).

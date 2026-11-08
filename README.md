@@ -75,12 +75,17 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
 - `EXPLAIN QUERY PLAN` provides plan descriptions; SQLite has no native
   `EXPLAIN ANALYZE` or PostgreSQL plan-cost/timing fields.
 - ⚠️ SQLite shows a CTE body every CTE of its `WITH`, the ones defined after it
-  included, with or without `RECURSIVE`. Selecto refuses, on every adapter, a
-  statement in which a CTE or VALUES name defined anywhere is also a relation
-  read anywhere in it (`query_rule_not_evaluable`,
-  `reason: :cte_name_collision`), or one name is defined twice with different
-  lists (`reason: :cte_name_redefined`); rename the CTE. Selecto's generated
-  CTEs are named `__selecto_...` by their content.
+  included, with or without `RECURSIVE`. Selecto holds one rule on every
+  adapter: a name a query reads is a reference to a CTE or VALUES list where the
+  statement makes it one (a domain rooted on a list its own query defines, a CTE
+  body's domain rooted on a list visible where the body sits, an ad-hoc join
+  naming a visible list) and a table everywhere else, filter subqueries and
+  declared non-association joins included. A table named like a list defined
+  anywhere in the statement refuses (`query_rule_not_evaluable`,
+  `reason: :cte_name_collision`), and one name defined twice with different
+  lists refuses (`reason: :cte_name_redefined`) unless the two sit in different
+  set members (each compiles as a derived table with its own WITH); rename the
+  CTE. Selecto's generated CTEs are named `__selecto_...` by their content.
 
 The available JSON, FTS5, math, and newer SQL features depend on the connected
 SQLite library's version and build. Coarse `supports?/1` flags describe adapter
