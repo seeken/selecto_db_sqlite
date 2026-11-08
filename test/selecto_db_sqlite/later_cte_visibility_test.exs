@@ -1,7 +1,7 @@
 defmodule SelectoDBSQLite.LaterCteVisibilityTest do
   # SQLite shows a CTE body every CTE of its WITH, the ones defined after it
-  # included, with or without RECURSIVE. A body that reads a table named like a
-  # later CTE would read that CTE's rows, so it refuses.
+  # included, with or without RECURSIVE. Selecto refuses a list named like a
+  # relation the statement reads anywhere, so such a body never reads the CTE.
   use ExUnit.Case, async: false
 
   alias SelectoDBSQLite.Adapter
@@ -121,7 +121,7 @@ defmodule SelectoDBSQLite.LaterCteVisibilityTest do
     for q <- [query(db, "lk"), walk(query(db, "lk"), db)] do
       assert {:error,
               %Selecto.Error{
-                details: %{reason: :cte_name_collision, relations: ["lk"], adapter: :sqlite}
+                details: %{reason: :cte_name_collision, relations: ["lk"]}
               }} = Selecto.execute(q)
     end
   end
@@ -129,5 +129,63 @@ defmodule SelectoDBSQLite.LaterCteVisibilityTest do
   test "a body reading a CTE defined before it reads the CTE", %{db: db} do
     assert {:ok, {rows, _, _}} = Selecto.execute(query(db, "lk", true))
     assert Enum.sort(rows) == [["a", "a", "a"], ["b", "b", "b"]]
+  end
+
+  # Union shapes: a CTE whose body is a set operation, one whose member defines
+  # its own CTE, and a top-level union member carrying a WITH.
+  defp union_body(db, member_cte?) do
+    fn ->
+      left = p(db) |> Selecto.filter({"id", 1}) |> Selecto.select(["id", "name"])
+
+      right =
+        if member_cte? do
+          own =
+            Selecto.Advanced.CTE.create_cte(
+              "pc",
+              fn -> p(db) |> Selecto.filter({"id", 2}) |> Selecto.select(["id", "name"]) end,
+              columns: ["pid", "pname"]
+            )
+
+          p(db)
+          |> Selecto.with_ctes([own])
+          |> Selecto.join(:pcj,
+            source: "pc",
+            source_kind: :cte,
+            type: :inner,
+            owner_key: :id,
+            related_key: :pid,
+            fields: %{"pname" => %{type: :string}}
+          )
+          |> Selecto.select(["id", "pcj.pname"])
+        else
+          p(db) |> Selecto.filter({"id", 2}) |> Selecto.select(["id", "name"])
+        end
+
+      Selecto.union(left, right, all: true)
+    end
+  end
+
+  defp union_cte(db, member_cte?) do
+    p(db)
+    |> Selecto.with_cte("u", union_body(db, member_cte?),
+      columns: ["uid", "uname"],
+      join: [owner_key: :id, related_key: :uid, fields: %{"uname" => %{type: :string}}]
+    )
+    |> Selecto.select(["name", "u.uname"])
+  end
+
+  test "a CTE whose body is a union answers", %{db: db} do
+    assert {:ok, {rows, _, _}} = Selecto.execute(union_cte(db, false))
+    assert Enum.sort(rows) == [["a", "a"], ["b", "b"]]
+  end
+
+  test "a CTE whose union body's member defines its own CTE answers", %{db: db} do
+    assert {:ok, {rows, _, _}} = Selecto.execute(union_cte(db, true))
+    assert Enum.sort(rows) == [["a", "a"], ["b", "b"]]
+  end
+
+  test "a top-level union member carrying a WITH answers", %{db: db} do
+    assert {:ok, {rows, _, _}} = Selecto.execute(union_body(db, true).())
+    assert Enum.sort(rows) == [[1, "a"], [2, "b"]]
   end
 end

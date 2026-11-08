@@ -2,9 +2,12 @@
 
 ## Unreleased
 
-- A CTE body that reads a table named like a CTE the statement defines after it
-  refuses (`cte_name_collision`): SQLite shows a body the later CTEs of its
-  `WITH`, so it read that CTE's rows instead of the table.
+- A CTE or VALUES name that is also a relation the statement reads anywhere
+  refuses (`cte_name_collision`), and one defined twice with different lists
+  refuses (`cte_name_redefined`), Selecto's rule on every adapter. SQLite shows
+  a body the later CTEs of its `WITH` from any position in it, so a body, its
+  subquery or its nested body read a later CTE's rows for a table, and a
+  generated closure CTE read a user CTE named like its closure table.
 - Transaction and rule-projection savepoint names carry a random nonce
   instead of a counter, so a host savepoint can never share one (w3exp5
   item 20).
