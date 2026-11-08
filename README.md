@@ -74,6 +74,12 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
   closed when `RETURNING` is unavailable
 - `EXPLAIN QUERY PLAN` provides plan descriptions; SQLite has no native
   `EXPLAIN ANALYZE` or PostgreSQL plan-cost/timing fields.
+- ⚠️ SQLite shows a CTE body every CTE of its `WITH`, the ones defined after it
+  included, with or without `RECURSIVE`. A CTE body that reads a table named
+  like a CTE the statement defines after it would read that CTE's rows, so it
+  refuses (`query_rule_not_evaluable`, `reason: :cte_name_collision`); rename
+  the CTE or define it before the body. Selecto's own generated CTEs take
+  reserved `__selecto_` names and never collide with a table.
 
 The available JSON, FTS5, math, and newer SQL features depend on the connected
 SQLite library's version and build. Coarse `supports?/1` flags describe adapter

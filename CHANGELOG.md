@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A CTE body that reads a table named like a CTE the statement defines after it
+  refuses (`cte_name_collision`): SQLite shows a body the later CTEs of its
+  `WITH`, so it read that CTE's rows instead of the table.
 - Transaction and rule-projection savepoint names carry a random nonce
   instead of a counter, so a host savepoint can never share one (w3exp5
   item 20).
