@@ -90,9 +90,11 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
   plain `name [(columns)] AS [NOT] [MATERIALIZED] (...)` definitions, comments
   allowed; every name it defines counts, and other text refuses
   (`raw_cte_unparsed`). Names compare case-insensitively on every adapter,
-  which over-refuses where a dialect keeps case. A root named like one of its
-  own lists reads the list here, even where a table of that name exists.
-  Selecto's generated CTEs are named `__selecto_...` by their content.
+  which over-refuses where a dialect keeps case. On SQLite, [bracketed] names
+  are read; dollar quotes and nested block comments are refused. A root named
+  like one of its own lists reads the list here, even where a table of that
+  name exists. Selecto's generated CTEs are named `__selecto_...` by their
+  content.
 
 The available JSON, FTS5, math, and newer SQL features depend on the connected
 SQLite library's version and build. Coarse `supports?/1` flags describe adapter
