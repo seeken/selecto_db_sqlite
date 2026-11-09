@@ -86,10 +86,13 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
   in the statement refuses (`query_rule_not_evaluable`,
   `reason: :cte_name_collision`), and one name defined twice with different
   lists refuses (`reason: :cte_name_redefined`) unless the two sit in
-  different set members. A raw CTE counts by the name its text starts with. A
-  root named like one of its own lists reads the list here, even where a table
-  of that name exists. Selecto's generated CTEs are named `__selecto_...` by
-  their content.
+  different set members. A raw CTE's text (`{:raw_cte, sql, params}`) must be
+  plain `name [(columns)] AS [NOT] [MATERIALIZED] (...)` definitions, comments
+  allowed; every name it defines counts, and other text refuses
+  (`raw_cte_unparsed`). Names compare case-insensitively on every adapter,
+  which over-refuses where a dialect keeps case. A root named like one of its
+  own lists reads the list here, even where a table of that name exists.
+  Selecto's generated CTEs are named `__selecto_...` by their content.
 
 The available JSON, FTS5, math, and newer SQL features depend on the connected
 SQLite library's version and build. Coarse `supports?/1` flags describe adapter
