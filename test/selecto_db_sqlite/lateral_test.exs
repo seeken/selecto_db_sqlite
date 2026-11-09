@@ -593,7 +593,8 @@ defmodule SelectoDBSQLite.LateralTest do
       Selecto.to_sql(q)
       flunk("unsupported SQLite lateral query was admitted")
     rescue
-      error in RuntimeError -> Exception.message(error)
+      # A LATERAL the adapter cannot render refuses typed (lateral_unsupported).
+      error in Selecto.Builder.ScopeRefusal -> Exception.message(error)
     end
   end
 
