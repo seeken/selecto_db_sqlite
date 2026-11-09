@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A LATERAL join outside the bounded correlated row shape refuses typed (`lateral_unsupported`) instead of raising.
 - A nested fragment holding a numbered or named parameter (`?NNN`, `:x`, `@x`,
   `$x`), or a `?` without params, refuses typed instead of binding a value of
   the statement around it.
