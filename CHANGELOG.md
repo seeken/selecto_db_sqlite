@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `analyze_query/2` returns a compile refusal (a nested fragment whose
+  placeholders its params do not match) as a typed error instead of raising.
 - A raw CTE's text must be plain definitions, comments allowed; every name it
   defines counts (several in one text, comments before them, backtick or
   double-quoted names), and text that does not parse refuses `raw_cte_unparsed`.

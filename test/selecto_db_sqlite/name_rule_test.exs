@@ -680,4 +680,17 @@ defmodule SelectoDBSQLite.NameRuleTest do
 
     assert outcome(filtered) == [["a"]]
   end
+
+  test "query analysis of a refused compile comes back typed", ctx do
+    refused = Selecto.filter(q(ctx, p(ctx)), {:exists, "SELECT 1", ["x"]})
+
+    for result <- [
+          SelectoDBSQLite.Adapter.analyze_query(refused, []),
+          Selecto.Performance.QueryAnalyzer.analyze_query(refused),
+          Selecto.Performance.QueryAnalyzer.get_query_plan(refused),
+          Selecto.Performance.QueryAnalyzer.compare_queries(refused, refused)
+        ] do
+      assert {:error, %Selecto.Error{details: %{reason: :placeholder_count_mismatch}}} = result
+    end
+  end
 end
