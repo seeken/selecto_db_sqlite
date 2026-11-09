@@ -535,7 +535,7 @@ defmodule SelectoDBSQLite.NameRuleTest do
   end
 
   test "a Tcl-style parameter in a raw CTE's text refuses", ctx do
-    for mark <- ["$", "@", ":"] do
+    for mark <- ["$", "@", ":", "#"] do
       text =
         "x AS (SELECT #{mark}x(') AS v), #{ctx.t.r} AS (#{raw_r(ctx)}), " <>
           "y AS (SELECT #{mark}y(') AS w)"

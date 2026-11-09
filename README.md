@@ -92,7 +92,7 @@ selecto = Selecto.configure(domain, config, adapter: SelectoDBSQLite.Adapter)
   (`raw_cte_unparsed`). Names compare case-insensitively on every adapter,
   which over-refuses where a dialect keeps case. On SQLite, [bracketed] names
   are read; dollar quotes, nested block comments and Tcl-style `$x(...)`,
-  `@x(...)` and `:x(...)` parameters are refused. A raw CTE whose params do not
+  `@x(...)`, `:x(...)` and `#x(...)` parameters are refused. A raw CTE whose params do not
   match its placeholders refuses (`raw_cte_params_mismatch`). A list named with
   a word any supported dialect reserves (`With`, `Desc`, `Window`, ...) is
   quoted. A root named
