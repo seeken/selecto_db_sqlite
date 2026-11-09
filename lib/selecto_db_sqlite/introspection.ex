@@ -112,6 +112,10 @@ defmodule SelectoDBSQLite.Introspection do
          }}
       end
     end
+  rescue
+    # A compile refusal (Selecto.Builder.ScopeRefusal) is a typed error, as
+    # from Selecto.execute/2.
+    refusal in Selecto.Builder.ScopeRefusal -> {:error, Selecto.Error.from_reason(refusal)}
   end
 
   defp pragma(connection, schema, operation, target, opts),
