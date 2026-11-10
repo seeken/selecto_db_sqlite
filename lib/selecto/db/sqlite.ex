@@ -37,6 +37,7 @@ defmodule Selecto.DB.SQLite do
     to: SelectoDBSQLite.Adapter
 
   defdelegate placeholder(index), to: SelectoDBSQLite.Adapter
+  defdelegate parameter_placeholder(index, value), to: SelectoDBSQLite.Adapter
   defdelegate quote_identifier(identifier), to: SelectoDBSQLite.Adapter
   defdelegate format_datetime(sel_iodata, format), to: SelectoDBSQLite.Adapter
   defdelegate rollup_literal_order(index), to: SelectoDBSQLite.Adapter
