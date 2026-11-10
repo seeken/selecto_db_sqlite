@@ -246,20 +246,18 @@ defmodule SelectoDBSQLite.Adapter do
   @impl true
   def placeholder(_index), do: "?"
 
-  # SQLite has no NaN or infinite numeric: such a Decimal would bind as text
-  # and compare as text. It refuses typed instead.
-  @impl true
-  def parameter_placeholder(_index, %Decimal{coef: coef}) when not is_integer(coef) do
-    Selecto.Builder.ScopeRefusal.unsupported!(
-      Selecto.Error.validation_error("SQLite cannot bind a NaN or infinite decimal parameter", %{
-        adapter: :sqlite,
-        unsupported_feature: :decimal_non_finite
-      }),
-      :parameter_unbindable
-    )
-  end
+  # A value SQLite cannot bind faithfully (a NaN or infinite Decimal, which
+  # would be kept as text; a Decimal past fifteen significant digits or the
+  # double range, which becomes another double; a year outside 1..9999; a
+  # float special atom) refuses typed (Selecto.SQL.ParamValues), in reads here
+  # and in writes.
+  @param_rules [decimal: :double, years: true, float_atoms: true]
 
-  def parameter_placeholder(index, _value), do: placeholder(index)
+  @impl true
+  def parameter_placeholder(index, value) do
+    Selecto.SQL.ParamValues.refuse!(value, @param_rules, :sqlite)
+    placeholder(index)
+  end
 
   @impl true
   def quote_identifier(identifier) do
@@ -307,6 +305,8 @@ defmodule SelectoDBSQLite.Adapter do
   def supports?(:text_search), do: true
   def supports?(:rollup), do: true
   def supports?(:stream), do: true
+  # UUIDs are TEXT (see the README's type map): filters bind the string form.
+  def supports?(:uuid_text_storage), do: true
   def supports?(:schema_introspection), do: true
   def supports?(:query_analysis), do: true
   def supports?(_feature), do: false
@@ -453,7 +453,8 @@ defmodule SelectoDBSQLite.Adapter do
   def execute_write_unsafe(connection, write, opts \\ [])
 
   def execute_write_unsafe(connection, %Command{} = command, opts) do
-    with :ok <- Command.validate(command) do
+    with :ok <- Command.validate(command),
+         :ok <- Selecto.SQL.ParamValues.write_refusal(command, @param_rules, :sqlite) do
       with_write_transaction(connection, opts, fn tx ->
         with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, command, opts),
              :ok <- SelectoDBSQLite.UpsertCandidate.validate(tx, command, opts),
@@ -463,7 +464,8 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   def execute_write_unsafe(connection, %Batch{} = batch, opts) do
-    with :ok <- Batch.validate(batch) do
+    with :ok <- Batch.validate(batch),
+         :ok <- Selecto.SQL.ParamValues.write_refusal(batch, @param_rules, :sqlite) do
       with_write_transaction(connection, opts, fn tx ->
         with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, batch, opts),
              :ok <- SelectoDBSQLite.UpsertCandidate.validate(tx, batch, opts) do
@@ -479,7 +481,8 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   def execute_write_unsafe(connection, %Graph{} = graph, opts) do
-    with :ok <- Graph.validate(graph) do
+    with :ok <- Graph.validate(graph),
+         :ok <- Selecto.SQL.ParamValues.write_refusal(graph, @param_rules, :sqlite) do
       with_write_transaction(connection, opts, fn tx -> execute_graph(tx, graph, opts) end)
     end
   end
@@ -527,6 +530,7 @@ defmodule SelectoDBSQLite.Adapter do
       try do
         with {:ok, write, context} <- prepare_fun.(loader),
              :ok <- validate_prepared_write(write),
+             :ok <- Selecto.SQL.ParamValues.write_refusal(write, @param_rules, :sqlite),
              :ok <- Capabilities.require(write_capabilities(tx), write),
              :ok <-
                SelectoDBSQLite.PreparedWriteSafety.validate(
@@ -1521,11 +1525,29 @@ defmodule SelectoDBSQLite.Adapter do
   end
 
   defp fetch_rows(db, statement, acc) do
-    case Exqlite.Sqlite3.step(db, statement) do
+    case step(db, statement) do
       {:row, row} -> fetch_rows(db, statement, [row | acc])
       :done -> {:ok, Enum.reverse(acc)}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  @doc false
+  # A stored value the driver cannot return (a REAL holding +/-Inf, which no
+  # Elixir float can be) fails the step with ArgumentError: a typed error
+  # instead, so the statement is released and the read guard restored.
+  def step(db, statement) do
+    Exqlite.Sqlite3.step(db, statement)
+  rescue
+    ArgumentError -> {:error, unreadable_value()}
+  end
+
+  defp unreadable_value do
+    Selecto.Error.query_error("SQLite returned a value that cannot be read", nil, [], %{
+      adapter: :sqlite,
+      category: :value_out_of_range,
+      reason: :sqlite_value_unreadable
+    })
   end
 
   # Convert PostgreSQL-style $1, $2 to SQLite's numbered ?1, ?2, which bind by

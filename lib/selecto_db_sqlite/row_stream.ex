@@ -73,7 +73,7 @@ defmodule SelectoDBSQLite.RowStream do
       end,
       fn {statement, deadline, _prior} = state ->
         remaining = max(deadline - System.monotonic_time(:millisecond), 0)
-        task = Task.async(fn -> Exqlite.Sqlite3.step(connection, statement) end)
+        task = Task.async(fn -> Adapter.step(connection, statement) end)
 
         case Task.yield(task, remaining) do
           {:ok, {:row, row}} ->

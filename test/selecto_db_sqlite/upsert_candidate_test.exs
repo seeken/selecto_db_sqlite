@@ -280,7 +280,7 @@ defmodule SelectoDBSQLite.UpsertCandidateTest do
       command(
         %{
           id: 2,
-          key_value: Decimal.new("1e-400"),
+          key_value: Decimal.new("0.000"),
           start: Decimal.new(100),
           finish: Decimal.new(6)
         },
@@ -290,6 +290,22 @@ defmodule SelectoDBSQLite.UpsertCandidateTest do
         [:key_value],
         types
       )
+
+    # A Decimal past the double range (1e-400) would become 0 the same way,
+    # but no longer binds: it refuses typed before the write runs.
+    unbindable = %{
+      command
+      | assignments:
+          Enum.map(command.assignments, fn
+            %{field: :key_value} = assignment ->
+              %{assignment | value: {:literal, Decimal.new("1e-400")}}
+
+            assignment ->
+              assignment
+          end)
+    }
+
+    assert {:error, %Selecto.Write.Error{type: :invalid_value}} = prepared(db, [unbindable])
 
     assert {:ok, _} = prepared(db, [command])
     assert_receive {:candidate, %{branch: :conflict, values: values}}
