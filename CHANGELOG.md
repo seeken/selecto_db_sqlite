@@ -2,15 +2,20 @@
 
 ## Unreleased
 
-- Decimals bind as before except past the double range: integral Decimals
-  within int64 bind as integers, every other finite Decimal as its text, so
-  19-digit integers, shortest forms of doubles and TEXT-column decimals
-  compare and store as they did. UUID filters bind the text as given.
+- Decimals bind as their text, as before; only a Decimal that overflows a
+  double (to an infinity) or a nonzero one that underflows to 0 refuses
+  (`parameter_unbindable`), in reads and writes. 1e308,
+  1.7976931348623157e308, 1e-308 and 4.9e-324 bind as they did; 19-digit
+  integers, shortest forms of doubles and TEXT-column decimals compare and
+  store as they did. UUID filters bind the text as given, and text written to
+  a `:uuid` field must read as a UUID, as a filter's must.
+- Known limitation, as before: an aggregate compared with an integral Decimal
+  (`COUNT(*) = Decimal.new(22)`) compares a number with text and matches
+  nothing; pass an integer.
 - A value SQLite cannot bind faithfully refuses typed (`parameter_unbindable`)
   in reads and writes before it runs: a NaN or infinite Decimal (kept as
-  text), a Decimal past fifteen significant digits or the double range (which
-  becomes another double), a date or datetime outside the years 1 to 9999, and
-  a float special atom. UUID filters bind text (`:uuid_text_storage`). A
+  text), a Decimal that overflows a double or underflows to 0, a date or
+  datetime outside the years 0 to 9999, and a float special atom. UUID filters bind text (`:uuid_text_storage`). A
   stored value the driver cannot return (a REAL holding +/-Inf) is a typed
   error, and the connection's read guard is restored, instead of an
   ArgumentError that left the connection refusing every later read.
