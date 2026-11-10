@@ -247,12 +247,14 @@ defmodule SelectoDBSQLite.Adapter do
   def placeholder(_index), do: "?"
 
   # A value SQLite would get wrong (a NaN or infinite Decimal, which would be
-  # kept as text; a Decimal past the double range, which a numeric column
-  # takes as an infinity or 0; a year outside 0..9999; a float special atom)
+  # kept as text; a Decimal that overflows a double, which a numeric column
+  # takes as an infinity, or a nonzero one that underflows to 0; a year
+  # outside 0..9999; a float special atom)
   # refuses typed (Selecto.SQL.ParamValues), in reads here and in writes. A
   # Decimal binds as its text as before, compared and stored as the column's
   # affinity takes it.
   @param_rules [decimal: :double, years: true, float_atoms: true]
+  @write_rules [decimal: :double, years: true, float_atoms: true, uuid_text: true]
 
   @impl true
   def parameter_placeholder(index, value) do
@@ -455,7 +457,7 @@ defmodule SelectoDBSQLite.Adapter do
 
   def execute_write_unsafe(connection, %Command{} = command, opts) do
     with :ok <- Command.validate(command),
-         :ok <- Selecto.SQL.ParamValues.write_refusal(command, @param_rules, :sqlite) do
+         :ok <- Selecto.SQL.ParamValues.write_refusal(command, @write_rules, :sqlite) do
       with_write_transaction(connection, opts, fn tx ->
         with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, command, opts),
              :ok <- SelectoDBSQLite.UpsertCandidate.validate(tx, command, opts),
@@ -466,7 +468,7 @@ defmodule SelectoDBSQLite.Adapter do
 
   def execute_write_unsafe(connection, %Batch{} = batch, opts) do
     with :ok <- Batch.validate(batch),
-         :ok <- Selecto.SQL.ParamValues.write_refusal(batch, @param_rules, :sqlite) do
+         :ok <- Selecto.SQL.ParamValues.write_refusal(batch, @write_rules, :sqlite) do
       with_write_transaction(connection, opts, fn tx ->
         with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, batch, opts),
              :ok <- SelectoDBSQLite.UpsertCandidate.validate(tx, batch, opts) do
@@ -483,7 +485,7 @@ defmodule SelectoDBSQLite.Adapter do
 
   def execute_write_unsafe(connection, %Graph{} = graph, opts) do
     with :ok <- Graph.validate(graph),
-         :ok <- Selecto.SQL.ParamValues.write_refusal(graph, @param_rules, :sqlite) do
+         :ok <- Selecto.SQL.ParamValues.write_refusal(graph, @write_rules, :sqlite) do
       with_write_transaction(connection, opts, fn tx -> execute_graph(tx, graph, opts) end)
     end
   end
@@ -531,7 +533,7 @@ defmodule SelectoDBSQLite.Adapter do
       try do
         with {:ok, write, context} <- prepare_fun.(loader),
              :ok <- validate_prepared_write(write),
-             :ok <- Selecto.SQL.ParamValues.write_refusal(write, @param_rules, :sqlite),
+             :ok <- Selecto.SQL.ParamValues.write_refusal(write, @write_rules, :sqlite),
              :ok <- Capabilities.require(write_capabilities(tx), write),
              :ok <-
                SelectoDBSQLite.PreparedWriteSafety.validate(
@@ -1506,17 +1508,10 @@ defmodule SelectoDBSQLite.Adapter do
   defp normalize_params(params) when is_list(params), do: Enum.map(params, &normalize_param/1)
   defp normalize_params(params), do: params
 
-  # An integral Decimal written without a fraction binds as the integer it is
-  # (exact in every column); any other binds as its text, as it always did.
-  defp normalize_param(%Decimal{coef: coef, exp: exp} = value)
-       when is_integer(coef) and exp >= 0 do
-    integer = Decimal.to_integer(value)
-
-    if integer in -9_223_372_036_854_775_808..9_223_372_036_854_775_807,
-      do: integer,
-      else: Decimal.to_string(value, :normal)
-  end
-
+  # A Decimal binds as its text, as it always has: a numeric column takes it
+  # by its affinity, a TEXT, BLOB or untyped column keeps the text. (An
+  # aggregate compared with an integral Decimal, COUNT(*) = 22, compares a
+  # number with text and does not match.)
   defp normalize_param(%Decimal{} = value), do: Decimal.to_string(value, :normal)
   defp normalize_param(true), do: 1
   defp normalize_param(false), do: 0

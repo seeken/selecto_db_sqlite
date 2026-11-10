@@ -154,14 +154,138 @@ defmodule SelectoDBSQLite.ParameterValueTest do
       rows |> List.flatten() |> Enum.sort()
     end
 
-    # An integral 19-digit Decimal (bound as the integer), the shortest form of
-    # a stored double, a Decimal.div result, a 20-digit decimal in TEXT.
+    # An integral 19-digit Decimal (bound as its text, which the column's
+    # numeric affinity reads as the integer), the shortest form of a stored
+    # double, a Decimal.div result, a 20-digit decimal in TEXT.
     assert rows.({"dn", Decimal.new("1234567890123456789")}) == [1]
     assert rows.({"dn", {:in, [Decimal.new("1234567890123456789"), Decimal.new(7)]}}) == [1, 2]
     assert rows.({"dr", Decimal.from_float(0.1 + 0.2)}) == [1]
     assert rows.({"dr", "0.30000000000000004"}) == [1]
     assert rows.({"dr", {:>, Decimal.div(1, 3)}}) == [2]
     assert rows.({"dt", Decimal.new("12345678901234567890.123")}) == [1]
+  end
+
+  test "a Decimal at the edges of the double range binds; only infinity and 0 refuse",
+       %{connection: connection} do
+    {:ok, _} = Adapter.execute(connection, "CREATE TABLE e (id INTEGER, x REAL)", [], [])
+
+    edges = [
+      {1, Decimal.new("1e308")},
+      {2, Decimal.new("1.7976931348623157e308")},
+      {3, Decimal.new("-1.7976931348623157e308")},
+      {4, Decimal.new("1e-308")},
+      {5, Decimal.new("4.9e-324")}
+    ]
+
+    for {id, value} <- edges do
+      {:ok, insert} =
+        Selecto.Write.Command.new(%{
+          operation: :insert,
+          relation: :e,
+          assignments: [
+            %{field: :id, value: {:literal, id}},
+            %{field: :x, value: {:literal, value}}
+          ]
+        })
+
+      assert {:ok, _} = Adapter.execute_write_unsafe(connection, insert, []), inspect(value)
+    end
+
+    assert {:ok, %{rows: [[5]]}} =
+             Adapter.execute(
+               connection,
+               "SELECT COUNT(*) FROM e WHERE x <> 0 AND x BETWEEN -1.8e308 AND 1.8e308",
+               [],
+               []
+             )
+
+    domain = %{
+      name: "e",
+      source: %{
+        source_table: "e",
+        primary_key: :id,
+        fields: [:id, :x],
+        redact_fields: [],
+        columns: %{id: %{type: :integer}, x: %{type: :decimal}},
+        associations: %{}
+      },
+      schemas: %{},
+      joins: %{}
+    }
+
+    read = fn filter ->
+      Selecto.configure(domain, connection, adapter: Adapter, validate: false)
+      |> Selecto.filter(filter)
+      |> Selecto.select(["id"])
+      |> Selecto.execute()
+    end
+
+    for {id, value} <- edges,
+        do: assert({:ok, {[[^id]], _, _}} = read.({"x", value}), inspect(value))
+
+    for value <- ["1.7976931348623159e308", "-1.8e308", "2.4e-324", "-1e-400"] do
+      assert {:error, %Selecto.Error{details: %{reason: :parameter_unbindable}}} =
+               read.({"x", Decimal.new(value)}),
+             value
+    end
+  end
+
+  test "a Decimal binds as its text, so an untyped column keeps and finds text",
+       %{connection: connection} do
+    {:ok, _} = Adapter.execute(connection, "CREATE TABLE nt (id INTEGER, cb BLOB, cu)", [], [])
+
+    {:ok, _} =
+      Adapter.execute(
+        connection,
+        "INSERT INTO nt VALUES (1, '100', '100'), (2, 100, 100)",
+        [],
+        []
+      )
+
+    for {id, value} <- [{3, Decimal.new(7)}, {4, Decimal.new("1.50")}] do
+      {:ok, insert} =
+        Selecto.Write.Command.new(%{
+          operation: :insert,
+          relation: :nt,
+          assignments: [
+            %{field: :id, value: {:literal, id}},
+            %{field: :cb, value: {:literal, value}},
+            %{field: :cu, value: {:literal, value}}
+          ]
+        })
+
+      assert {:ok, _} = Adapter.execute_write_unsafe(connection, insert, [])
+    end
+
+    assert {:ok, %{rows: [["text", "7", "text"], ["text", "1.50", "text"]]}} =
+             Adapter.execute(
+               connection,
+               "SELECT typeof(cb), cb, typeof(cu) FROM nt WHERE id > 2 ORDER BY id",
+               [],
+               []
+             )
+
+    domain = %{
+      name: "nt",
+      source: %{
+        source_table: "nt",
+        primary_key: :id,
+        fields: [:id, :cb, :cu],
+        redact_fields: [],
+        columns: %{id: %{type: :integer}, cb: %{type: :decimal}, cu: %{type: :decimal}},
+        associations: %{}
+      },
+      schemas: %{},
+      joins: %{}
+    }
+
+    for field <- ["cb", "cu"] do
+      assert {:ok, {[[1]], _, _}} =
+               Selecto.configure(domain, connection, adapter: Adapter, validate: false)
+               |> Selecto.filter({field, Decimal.new("1E+2")})
+               |> Selecto.select(["id"])
+               |> Selecto.execute()
+    end
   end
 
   test "a write of a value SQLite cannot bind faithfully refuses before it runs",
@@ -271,5 +395,35 @@ defmodule SelectoDBSQLite.ParameterValueTest do
                Selecto.execute(read.(value)),
              value
     end
+
+    # A write of such text to the :uuid field refuses the same way; a UUID in
+    # any form writes as given.
+    insert = fn id, value ->
+      {:ok, insert} =
+        Selecto.Write.Command.new(%{
+          operation: :insert,
+          relation: :u,
+          assignments: [
+            %{field: :id, value: {:literal, id}},
+            %{field: :u, value: {:literal, value}}
+          ],
+          metadata: %{field_types: %{id: :integer, u: :uuid}}
+        })
+
+      Adapter.execute_write_unsafe(connection, insert, [])
+    end
+
+    for value <- ["not-a-uuid", "{2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b}", "0123456789abcdef"] do
+      assert {:error,
+              %Selecto.Write.Error{
+                type: :invalid_value,
+                details: %{reason: :parameter_unbindable, unsupported_feature: :uuid_text}
+              }} = insert.(9, value),
+             value
+    end
+
+    assert {:ok, _} = insert.(3, "4C4C4C4C-4C4C-4C4C-8C4C-4C4C4C4C4C4C")
+    assert {:ok, {[[3]], _, _}} = Selecto.execute(read.("4C4C4C4C-4C4C-4C4C-8C4C-4C4C4C4C4C4C"))
+    assert {:ok, %{rows: [[3]]}} = Adapter.execute(connection, "SELECT COUNT(*) FROM u", [], [])
   end
 end
