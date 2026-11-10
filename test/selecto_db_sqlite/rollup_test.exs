@@ -225,11 +225,58 @@ defmodule SelectoDBSQLite.RollupTest do
     ]
 
     for set <- invalid_sets do
-      assert_raise RuntimeError, ~r/Unsupported SQLite rollup/, fn ->
+      assert_raise Selecto.Builder.ScopeRefusal, ~r/Unsupported SQLite rollup/, fn ->
         Selecto.to_sql(%{query | set: set})
       end
     end
   end
+
+  defp entry_points do
+    [
+      execute: &Selecto.execute/1,
+      execute_with_metadata: &Selecto.execute_with_metadata/1,
+      executor: &Selecto.Executor.execute/1,
+      execute_one: fn query -> Selecto.execute_one(Selecto.limit(query, 1)) end,
+      execute_stream: fn query ->
+        with {:ok, stream} <- Selecto.execute_stream(query),
+             do: {:ok, {Enum.map(stream, fn {row, _columns, _aliases} -> row end), [], []}}
+      end,
+      explain: &Selecto.explain/1
+    ]
+  end
+
+  test "a valid rollup answers on every execute entry point", %{base: base} do
+    query =
+      base
+      |> Selecto.select(["state", X.as(X.count(), "n")])
+      |> Selecto.group_by(X.rollup(["state"]))
+
+    for {name, entry} <- entry_points(), name not in [:execute_one, :explain] do
+      assert {:ok, {rows, _, _}} = normalize(entry.(query)), "#{name}"
+      assert Enum.sort(rows) == [[nil, 5], ["closed", 1], ["open", 3], ["orphan", 1]], "#{name}"
+    end
+
+    assert {:ok, _row} = normalize(Selecto.execute_one(Selecto.limit(query, 1)))
+    assert {:ok, _plan} = Selecto.explain(query)
+  end
+
+  test "a rollup SQLite cannot render refuses typed on every execute entry point", %{base: base} do
+    query = rollup(base, ["state"])
+
+    for set <- [
+          %{query.set | order_by: [{"person_id", :asc}]},
+          %{query.set | group_by: [{:rollup, ["state"]}, "person_id"]},
+          %{query.set | selected: ["person_id", X.as(X.count(), "n")]}
+        ],
+        {name, entry} <- entry_points() do
+      assert {:error, %Selecto.Error{details: %{unsupported_feature: :rollup}}} =
+               entry.(%{query | set: set}),
+             "#{name}"
+    end
+  end
+
+  defp normalize({:ok, {rows, columns, aliases}, _metadata}), do: {:ok, {rows, columns, aliases}}
+  defp normalize(other), do: other
 
   test "connected capabilities report emulated rollup rather than native ROLLUP syntax", %{
     connection: connection

@@ -20,7 +20,7 @@ defmodule SelectoDBSQLite.Rollup do
   def render(selecto, opts) do
     case RuntimeCapabilities.require_feature(selecto, :rollup) do
       :ok -> :ok
-      {:error, error} -> raise Selecto.Error.to_exception(error)
+      {:error, error} -> Selecto.Builder.ScopeRefusal.unsupported!(error)
     end
 
     dimensions = dimensions!(selecto.set.group_by)
@@ -321,6 +321,7 @@ defmodule SelectoDBSQLite.Rollup do
         unsupported_feature: :rollup
       })
 
-    raise Selecto.Error.to_exception(error)
+    # Refused typed through every execute entry point.
+    Selecto.Builder.ScopeRefusal.unsupported!(error)
   end
 end

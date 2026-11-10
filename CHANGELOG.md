@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A rollup SQLite cannot render, or one on a provider without rollup support,
+  refuses typed (`unsupported_feature: :rollup`) through every execute entry
+  point instead of raising. A NaN or infinite Decimal param refuses
+  `parameter_unbindable` instead of binding as text.
 - A LATERAL join outside the bounded correlated row shape refuses typed (`lateral_unsupported`) instead of raising.
 - A nested fragment holding a numbered or named parameter (`?NNN`, `:x`, `@x`,
   `$x`), or a `?` without params, refuses typed instead of binding a value of

@@ -246,6 +246,21 @@ defmodule SelectoDBSQLite.Adapter do
   @impl true
   def placeholder(_index), do: "?"
 
+  # SQLite has no NaN or infinite numeric: such a Decimal would bind as text
+  # and compare as text. It refuses typed instead.
+  @impl true
+  def parameter_placeholder(_index, %Decimal{coef: coef}) when not is_integer(coef) do
+    Selecto.Builder.ScopeRefusal.unsupported!(
+      Selecto.Error.validation_error("SQLite cannot bind a NaN or infinite decimal parameter", %{
+        adapter: :sqlite,
+        unsupported_feature: :decimal_non_finite
+      }),
+      :parameter_unbindable
+    )
+  end
+
+  def parameter_placeholder(index, _value), do: placeholder(index)
+
   @impl true
   def quote_identifier(identifier) do
     escaped = identifier |> to_string() |> String.replace("\"", "\"\"")
