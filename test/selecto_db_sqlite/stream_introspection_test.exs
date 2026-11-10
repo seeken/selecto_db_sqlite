@@ -34,7 +34,11 @@ defmodule SelectoDBSQLite.StreamIntrospectionTest do
       "WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < 100000000) SELECT sum(n) FROM numbers"
 
     assert {:ok, stream, _columns} = Adapter.stream(connection, sql, [], timeout: 10)
-    assert_raise RuntimeError, ~r/SQLite stream timed out/, fn -> Enum.to_list(stream) end
+
+    assert_raise Selecto.Error.Refused, ~r/SQLite stream timed out/, fn ->
+      Enum.to_list(stream)
+    end
+
     assert {:ok, %{rows: [[1]]}} = Adapter.execute(connection, "SELECT 1", [], [])
   end
 

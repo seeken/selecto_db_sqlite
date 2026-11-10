@@ -27,7 +27,10 @@ defmodule SelectoDBSQLite.ParameterValueTest do
       joins: %{}
     }
 
-    %{query: Selecto.configure(domain, connection, adapter: Adapter, validate: false)}
+    %{
+      connection: connection,
+      query: Selecto.configure(domain, connection, adapter: Adapter, validate: false)
+    }
   end
 
   test "a NaN or infinite decimal refuses typed instead of comparing as text", %{query: query} do
@@ -49,5 +52,47 @@ defmodule SelectoDBSQLite.ParameterValueTest do
 
     assert {:error, %Selecto.Error{details: %{reason: :invalid_filter_value}}} =
              Selecto.execute(read)
+  end
+
+  test "a server error while a stream is enumerated raises typed; an encode error at open returns typed",
+       %{query: query, connection: connection} do
+    domain = %{
+      name: "j",
+      source: %{
+        source_table: "j",
+        primary_key: :id,
+        fields: [:id, :doc],
+        redact_fields: [],
+        columns: %{id: %{type: :integer}, doc: %{type: :string}},
+        associations: %{}
+      },
+      schemas: %{},
+      joins: %{}
+    }
+
+    for sql <- [
+          "CREATE TABLE j (id INTEGER PRIMARY KEY, doc TEXT)",
+          "INSERT INTO j VALUES (1, '{}'), (2, 'x')"
+        ],
+        do: {:ok, _} = Adapter.execute(connection, sql, [], [])
+
+    # The second row's malformed JSON fails as its step runs.
+    read =
+      Selecto.configure(domain, connection, adapter: Adapter, validate: false)
+      |> Selecto.filter({:raw_sql_filter, "json_extract(doc, '$.a') IS NULL"})
+      |> Selecto.select(["id"])
+      |> Selecto.order_by("id")
+
+    assert {:error, %Selecto.Error{} = error} = Selecto.execute(read)
+    assert {:ok, stream} = Selecto.execute_stream(read)
+    refused = assert_raise Selecto.Error.Refused, fn -> Enum.to_list(stream) end
+
+    assert {refused.type, refused.message, refused.details} ==
+             {error.type, error.message, error.details}
+
+    # A parameter the driver cannot bind fails as the stream opens.
+    bad = query |> Selecto.filter({"price", {1, 2}}) |> Selecto.select(["id"])
+    assert {:error, %Selecto.Error{} = error} = Selecto.execute(bad)
+    assert {:error, ^error} = Selecto.execute_stream(bad)
   end
 end

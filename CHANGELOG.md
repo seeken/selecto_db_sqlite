@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A failure while a stream is enumerated (a refused stored value, a server
+  error, a timeout) raises `Selecto.Error.Refused` typed as the non-stream
+  read would return it, instead of a RuntimeError carrying only a message.
 - A rollup SQLite cannot render, or one on a provider without rollup support,
   refuses typed (`unsupported_feature: :rollup`) through every execute entry
   point instead of raising. A NaN or infinite Decimal param refuses
