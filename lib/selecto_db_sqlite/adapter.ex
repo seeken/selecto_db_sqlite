@@ -246,11 +246,12 @@ defmodule SelectoDBSQLite.Adapter do
   @impl true
   def placeholder(_index), do: "?"
 
-  # A value SQLite cannot bind faithfully (a NaN or infinite Decimal, which
-  # would be kept as text; a Decimal past fifteen significant digits or the
-  # double range, which becomes another double; a year outside 1..9999; a
-  # float special atom) refuses typed (Selecto.SQL.ParamValues), in reads here
-  # and in writes.
+  # A value SQLite would get wrong (a NaN or infinite Decimal, which would be
+  # kept as text; a Decimal past the double range, which a numeric column
+  # takes as an infinity or 0; a year outside 0..9999; a float special atom)
+  # refuses typed (Selecto.SQL.ParamValues), in reads here and in writes. A
+  # Decimal binds as its text as before, compared and stored as the column's
+  # affinity takes it.
   @param_rules [decimal: :double, years: true, float_atoms: true]
 
   @impl true
@@ -1504,6 +1505,17 @@ defmodule SelectoDBSQLite.Adapter do
 
   defp normalize_params(params) when is_list(params), do: Enum.map(params, &normalize_param/1)
   defp normalize_params(params), do: params
+
+  # An integral Decimal written without a fraction binds as the integer it is
+  # (exact in every column); any other binds as its text, as it always did.
+  defp normalize_param(%Decimal{coef: coef, exp: exp} = value)
+       when is_integer(coef) and exp >= 0 do
+    integer = Decimal.to_integer(value)
+
+    if integer in -9_223_372_036_854_775_808..9_223_372_036_854_775_807,
+      do: integer,
+      else: Decimal.to_string(value, :normal)
+  end
 
   defp normalize_param(%Decimal{} = value), do: Decimal.to_string(value, :normal)
   defp normalize_param(true), do: 1
