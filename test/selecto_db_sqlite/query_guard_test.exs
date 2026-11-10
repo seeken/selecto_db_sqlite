@@ -83,7 +83,7 @@ defmodule SelectoDBSQLite.QueryGuardTest do
       assert Enum.to_list(stream) == [[1]]
       assert setting(conn) == prior
       assert {:ok, broken, _} = Adapter.stream(conn, "SELECT json_extract('bad', '$.a')", [], [])
-      assert_raise RuntimeError, fn -> Enum.to_list(broken) end
+      assert_raise Selecto.Error.Refused, fn -> Enum.to_list(broken) end
       assert setting(conn) == prior
     end
 
@@ -97,14 +97,14 @@ defmodule SelectoDBSQLite.QueryGuardTest do
                stream_timeout: 0
              )
 
-    assert_raise RuntimeError, "SQLite stream timed out", fn -> Enum.to_list(timed) end
+    assert_raise Selecto.Error.Refused, "SQLite stream timed out", fn -> Enum.to_list(timed) end
     assert setting(conn) == 0
   end
 
   test "lazy stream preparation and consumer failures release guard ownership", %{conn: conn} do
     {:ok, stream, _} = Adapter.stream(conn, "SELECT value FROM rows_table", [], [])
     {:ok, _} = Adapter.execute(conn, "DROP TABLE rows_table", [], [])
-    assert_raise RuntimeError, fn -> Enum.to_list(stream) end
+    assert_raise Selecto.Error.Refused, fn -> Enum.to_list(stream) end
     assert setting(conn) == 0
     {:ok, stream, _} = Adapter.stream(conn, "SELECT 1", [], [])
 

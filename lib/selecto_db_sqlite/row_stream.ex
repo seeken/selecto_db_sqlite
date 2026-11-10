@@ -56,9 +56,15 @@ defmodule SelectoDBSQLite.RowStream do
               raise_error(reason)
           end
         rescue
+          refusal in Selecto.Error.Refused ->
+            SelectoDBSQLite.QueryGuard.restore(connection, prior)
+            reraise refusal, __STACKTRACE__
+
+          # Raised by the driver (a parameter it cannot bind), as the
+          # non-stream path raises it.
           exception ->
             SelectoDBSQLite.QueryGuard.restore(connection, prior)
-            reraise exception, __STACKTRACE__
+            raise_error({:adapter_raised, exception})
         catch
           kind, reason ->
             SelectoDBSQLite.QueryGuard.restore(connection, prior)
@@ -83,9 +89,7 @@ defmodule SelectoDBSQLite.RowStream do
             Exqlite.Sqlite3.interrupt(connection)
             Task.shutdown(task)
 
-            raise Selecto.Error.to_exception(
-                    Selecto.Error.timeout_error("SQLite stream timed out")
-                  )
+            raise Selecto.Error.Refused, Selecto.Error.timeout_error("SQLite stream timed out")
         end
       end,
       fn {statement, _deadline, prior} ->
@@ -93,13 +97,19 @@ defmodule SelectoDBSQLite.RowStream do
           Exqlite.Sqlite3.release(connection, statement)
         after
           case SelectoDBSQLite.QueryGuard.restore(connection, prior) do
-            :ok -> :ok
-            _ -> raise "SQLite read-only state could not be restored"
+            :ok ->
+              :ok
+
+            _ ->
+              raise Selecto.Error.Refused,
+                    Selecto.Error.connection_error("SQLite read-only state could not be restored")
           end
         end
       end
     )
   end
 
-  defp raise_error(reason), do: raise(Selecto.Error.to_exception(Adapter.normalize_error(reason)))
+  # Raised while the stream is enumerated: the Selecto.Error the non-stream
+  # path returns for the same failure, as Selecto.Error.Refused.
+  defp raise_error(reason), do: Selecto.Error.raise_stream_failure!(Adapter, reason)
 end
