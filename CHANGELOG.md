@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- A value SQLite cannot bind faithfully refuses typed (`parameter_unbindable`)
+  in reads and writes before it runs: a NaN or infinite Decimal (kept as
+  text), a Decimal past fifteen significant digits or the double range (which
+  becomes another double), a date or datetime outside the years 1 to 9999, and
+  a float special atom. UUID filters bind text (`:uuid_text_storage`). A
+  stored value the driver cannot return (a REAL holding +/-Inf) is a typed
+  error, and the connection's read guard is restored, instead of an
+  ArgumentError that left the connection refusing every later read.
 - A failure while a stream is enumerated (a refused stored value, a server
   error, a timeout) raises `Selecto.Error.Refused` typed as the non-stream
   read would return it, instead of a RuntimeError carrying only a message.
