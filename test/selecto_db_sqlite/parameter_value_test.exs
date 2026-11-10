@@ -96,12 +96,9 @@ defmodule SelectoDBSQLite.ParameterValueTest do
     assert {:error, ^error} = Selecto.execute_stream(bad)
   end
 
-  test "a Decimal no double holds, a year past 9999 and a float special refuse typed",
+  test "a Decimal past the double range, a year past 9999 and a float special refuse typed",
        %{query: query} do
-    long = %Decimal{sign: 1, coef: 14_999_999_999_999_999_999_999_999_999_999_999_999, exp: -37}
-
     for filter <- [
-          {"price", {:>=, long}},
           {"price", {:>=, Decimal.new("1e-400")}},
           {"price", {:in, [Decimal.new("-1e400")]}},
           {"price", {:>=, :inf}}
@@ -113,12 +110,58 @@ defmodule SelectoDBSQLite.ParameterValueTest do
              inspect(filter)
     end
 
-    # 1.4999...(37 digits) is no 1.50.
     read =
       query |> Selecto.filter({"price", {:>=, Decimal.new("1.49")}}) |> Selecto.select(["id"])
 
     assert {:ok, {rows, _, _}} = Selecto.execute(read)
     assert Enum.sort(rows) == [[1], [2]]
+  end
+
+  test "Decimals SQLite stores and compares exactly keep working", %{connection: connection} do
+    for sql <- [
+          "CREATE TABLE k (id INTEGER PRIMARY KEY, dn DECIMAL(20,0), dr REAL, dt TEXT)",
+          "INSERT INTO k VALUES (1, 1234567890123456789, 0.1 + 0.2, '12345678901234567890.123')",
+          "INSERT INTO k VALUES (2, 7, 0.5, '1')"
+        ],
+        do: {:ok, _} = Adapter.execute(connection, sql, [], [])
+
+    domain = %{
+      name: "k",
+      source: %{
+        source_table: "k",
+        primary_key: :id,
+        fields: [:id, :dn, :dr, :dt],
+        redact_fields: [],
+        columns: %{
+          id: %{type: :integer},
+          dn: %{type: :decimal},
+          dr: %{type: :decimal},
+          dt: %{type: :decimal}
+        },
+        associations: %{}
+      },
+      schemas: %{},
+      joins: %{}
+    }
+
+    rows = fn filter ->
+      {:ok, {rows, _, _}} =
+        Selecto.configure(domain, connection, adapter: Adapter, validate: false)
+        |> Selecto.filter(filter)
+        |> Selecto.select(["id"])
+        |> Selecto.execute()
+
+      rows |> List.flatten() |> Enum.sort()
+    end
+
+    # An integral 19-digit Decimal (bound as the integer), the shortest form of
+    # a stored double, a Decimal.div result, a 20-digit decimal in TEXT.
+    assert rows.({"dn", Decimal.new("1234567890123456789")}) == [1]
+    assert rows.({"dn", {:in, [Decimal.new("1234567890123456789"), Decimal.new(7)]}}) == [1, 2]
+    assert rows.({"dr", Decimal.from_float(0.1 + 0.2)}) == [1]
+    assert rows.({"dr", "0.30000000000000004"}) == [1]
+    assert rows.({"dr", {:>, Decimal.div(1, 3)}}) == [2]
+    assert rows.({"dt", Decimal.new("12345678901234567890.123")}) == [1]
   end
 
   test "a write of a value SQLite cannot bind faithfully refuses before it runs",
@@ -185,7 +228,7 @@ defmodule SelectoDBSQLite.ParameterValueTest do
     assert {:ok, %{rows: [[1]]}} = Adapter.execute_query(connection, "SELECT 1", [], [])
   end
 
-  test "a UUID in another text form compares as its canonical text", %{connection: connection} do
+  test "a UUID text value binds as given; text that is no UUID refuses", %{connection: connection} do
     {:ok, _} = Adapter.execute(connection, "CREATE TABLE u (id INTEGER, u TEXT)", [], [])
 
     {:ok, _} =
@@ -216,15 +259,17 @@ defmodule SelectoDBSQLite.ParameterValueTest do
       |> Selecto.select(["id"])
     end
 
-    for value <- [
-          "2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b",
-          "2B2B2B2B-2B2B-4B2B-8B2B-2B2B2B2B2B2B",
-          "2b2b2b2b2b2b4b2b8b2b2b2b2b2b2b2b"
-        ] do
-      assert {:ok, {[[1]], _, _}} = Selecto.execute(read.(value)), value
-    end
+    # A UUID binds as given (it is stored text, compared as text), as it did;
+    # text that is no UUID refuses.
+    assert {:ok, {[[1]], _, _}} = Selecto.execute(read.("2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b"))
 
-    assert {:error, %Selecto.Error{details: %{reason: :invalid_filter_value}}} =
-             Selecto.execute(read.("not-a-uuid"))
+    for value <- ["2B2B2B2B-2B2B-4B2B-8B2B-2B2B2B2B2B2B", "2b2b2b2b2b2b4b2b8b2b2b2b2b2b2b2b"],
+        do: assert({:ok, {[], _, _}} = Selecto.execute(read.(value)), value)
+
+    for value <- ["not-a-uuid", "2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b "] do
+      assert {:error, %Selecto.Error{details: %{reason: :invalid_filter_value}}} =
+               Selecto.execute(read.(value)),
+             value
+    end
   end
 end

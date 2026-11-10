@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Decimals bind as before except past the double range: integral Decimals
+  within int64 bind as integers, every other finite Decimal as its text, so
+  19-digit integers, shortest forms of doubles and TEXT-column decimals
+  compare and store as they did. UUID filters bind the text as given.
 - A value SQLite cannot bind faithfully refuses typed (`parameter_unbindable`)
   in reads and writes before it runs: a NaN or infinite Decimal (kept as
   text), a Decimal past fifteen significant digits or the double range (which
