@@ -223,7 +223,33 @@ defmodule SelectoDBSQLite.ParameterValueTest do
     for {id, value} <- edges,
         do: assert({:ok, {[[^id]], _, _}} = read.({"x", value}), inspect(value))
 
-    for value <- ["1.7976931348623159e308", "-1.8e308", "2.4e-324", "-1e-400"] do
+    # SQLite keeps 19 significant digits, cut, before it converts: a value
+    # below 1.797693134862315808e308 by its cut stores the largest double.
+    band = %Decimal{
+      sign: 1,
+      coef: 1_797_693_134_862_315_807_999_999_999_999_999_999_999_999_999_999_999,
+      exp: 257
+    }
+
+    {:ok, insert} =
+      Selecto.Write.Command.new(%{
+        operation: :insert,
+        relation: :e,
+        assignments: [%{field: :id, value: {:literal, 6}}, %{field: :x, value: {:literal, band}}]
+      })
+
+    assert {:ok, _} = Adapter.execute_write_unsafe(connection, insert, [])
+    assert {:ok, {rows, _, _}} = read.({"x", band})
+    assert Enum.sort(rows) == [[2], [6]]
+
+    for value <- [
+          "1.7976931348623159e308",
+          "1.797693134862315808e308",
+          "-1.8e308",
+          "2.4e-324",
+          "2.4703282292062327209e-324",
+          "-1e-400"
+        ] do
       assert {:error, %Selecto.Error{details: %{reason: :parameter_unbindable}}} =
                read.({"x", Decimal.new(value)}),
              value
@@ -413,7 +439,7 @@ defmodule SelectoDBSQLite.ParameterValueTest do
       Adapter.execute_write_unsafe(connection, insert, [])
     end
 
-    for value <- ["not-a-uuid", "{2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b}", "0123456789abcdef"] do
+    for value <- ["not-a-uuid", "{2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b}", "0123456789abcde"] do
       assert {:error,
               %Selecto.Write.Error{
                 type: :invalid_value,
@@ -424,6 +450,14 @@ defmodule SelectoDBSQLite.ParameterValueTest do
 
     assert {:ok, _} = insert.(3, "4C4C4C4C-4C4C-4C4C-8C4C-4C4C4C4C4C4C")
     assert {:ok, {[[3]], _, _}} = Selecto.execute(read.("4C4C4C4C-4C4C-4C4C-8C4C-4C4C4C4C4C4C"))
-    assert {:ok, %{rows: [[3]]}} = Adapter.execute(connection, "SELECT COUNT(*) FROM u", [], [])
+
+    # 16 bytes are a raw UUID (BLOB storage) and write as given.
+    raw = UUID.string_to_binary!("4c4c4c4c-4c4c-4c4c-8c4c-4c4c4c4c4c4c")
+    assert {:ok, _} = insert.(4, raw)
+
+    assert {:ok, %{rows: [[^raw]]}} =
+             Adapter.execute(connection, "SELECT u FROM u WHERE id = 4", [], [])
+
+    assert {:ok, %{rows: [[4]]}} = Adapter.execute(connection, "SELECT COUNT(*) FROM u", [], [])
   end
 end
