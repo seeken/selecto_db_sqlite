@@ -457,7 +457,7 @@ defmodule SelectoDBSQLite.Adapter do
 
   def execute_write_unsafe(connection, %Command{} = command, opts) do
     with :ok <- Command.validate(command),
-         :ok <- Selecto.SQL.ParamValues.write_refusal(command, @write_rules, :sqlite) do
+         :ok <- Selecto.SQL.ParamValues.write_refusal(command, @write_rules, :sqlite, opts) do
       with_write_transaction(connection, opts, fn tx ->
         with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, command, opts),
              :ok <- SelectoDBSQLite.UpsertCandidate.validate(tx, command, opts),
@@ -468,7 +468,7 @@ defmodule SelectoDBSQLite.Adapter do
 
   def execute_write_unsafe(connection, %Batch{} = batch, opts) do
     with :ok <- Batch.validate(batch),
-         :ok <- Selecto.SQL.ParamValues.write_refusal(batch, @write_rules, :sqlite) do
+         :ok <- Selecto.SQL.ParamValues.write_refusal(batch, @write_rules, :sqlite, opts) do
       with_write_transaction(connection, opts, fn tx ->
         with :ok <- SelectoDBSQLite.PreparedWriteSafety.validate(tx, batch, opts),
              :ok <- SelectoDBSQLite.UpsertCandidate.validate(tx, batch, opts) do
@@ -485,7 +485,7 @@ defmodule SelectoDBSQLite.Adapter do
 
   def execute_write_unsafe(connection, %Graph{} = graph, opts) do
     with :ok <- Graph.validate(graph),
-         :ok <- Selecto.SQL.ParamValues.write_refusal(graph, @write_rules, :sqlite) do
+         :ok <- Selecto.SQL.ParamValues.write_refusal(graph, @write_rules, :sqlite, opts) do
       with_write_transaction(connection, opts, fn tx -> execute_graph(tx, graph, opts) end)
     end
   end
@@ -533,7 +533,13 @@ defmodule SelectoDBSQLite.Adapter do
       try do
         with {:ok, write, context} <- prepare_fun.(loader),
              :ok <- validate_prepared_write(write),
-             :ok <- Selecto.SQL.ParamValues.write_refusal(write, @write_rules, :sqlite),
+             :ok <-
+               Selecto.SQL.ParamValues.write_refusal(
+                 write,
+                 @write_rules,
+                 :sqlite,
+                 Keyword.put(opts, :context, context)
+               ),
              :ok <- Capabilities.require(write_capabilities(tx), write),
              :ok <-
                SelectoDBSQLite.PreparedWriteSafety.validate(

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The double rule follows SQLite's own read of a number (19 significant
+  digits, cut): Decimals that SQLite stores as the largest double bind again
+  (main stored them); only one SQLite reads as an infinity, or a nonzero one
+  it reads as 0.0, refuses. A raw 16-byte :uuid value writes as given again.
 - Decimals bind as their text, as before; only a Decimal that overflows a
   double (to an infinity) or a nonzero one that underflows to 0 refuses
   (`parameter_unbindable`), in reads and writes. 1e308,
