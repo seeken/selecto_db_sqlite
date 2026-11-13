@@ -1,7 +1,7 @@
-# Optional public Updato integration; load the selected core, Updato and SQLite
-# adapter dependencies before running: elixir scripts/sqlite_owned_key_regression.exs
+# Optional public Updato integration; load the selected core (which includes
+# Updato) and SQLite adapter dependencies before running: elixir scripts/sqlite_owned_key_regression.exs
 ExUnit.start()
-{:ok, _} = Application.ensure_all_started(:selecto_updato)
+{:ok, _} = Application.ensure_all_started(:selecto)
 {:ok, _} = Application.ensure_all_started(:selecto_db_sqlite)
 
 defmodule SelectoDBSQLite.NativeOwnedKeyTest do
