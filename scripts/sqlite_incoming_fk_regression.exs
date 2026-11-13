@@ -1,6 +1,6 @@
 # Public Updato proof; load selected dependencies before executing this script.
 ExUnit.start()
-{:ok, _} = Application.ensure_all_started(:selecto_updato)
+{:ok, _} = Application.ensure_all_started(:selecto)
 {:ok, _} = Application.ensure_all_started(:selecto_db_sqlite)
 
 defmodule SelectoDBSQLite.NativeIncomingFKTest do

@@ -1,5 +1,5 @@
 ExUnit.start()
-{:ok, _} = Application.ensure_all_started(:selecto_updato)
+{:ok, _} = Application.ensure_all_started(:selecto)
 {:ok, _} = Application.ensure_all_started(:selecto_db_sqlite)
 
 defmodule SelectoDBSQLite.PublicDeleteEffectsTest do

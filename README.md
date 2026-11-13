@@ -534,7 +534,7 @@ plan targets refuse because they can invalidate that proof. TEMP target shadows
 also refuse. These are finite native admission boundaries; attached-schema
 effects are not established by this check. Public native
 controls are available in `scripts/sqlite_incoming_fk_regression.exs` and
-`scripts/sqlite_delete_effects_regression.exs` with the selected Updato dependency.
+`scripts/sqlite_delete_effects_regression.exs` with the selected core dependency.
 
 Protected UPSERT candidates use an adapter-owned branch witness inside the same
 prepared transaction. Native `index_list`/`index_xinfo` facts establish a rowid
