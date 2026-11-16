@@ -166,6 +166,7 @@ defmodule SelectoDBSQLite.Adapter do
 
   @impl true
   def disconnect(connection) when is_reference(connection) do
+    SelectoDBSQLite.ConnectionOwner.close(connection)
     SelectoDBSQLite.QueryGuard.close(connection)
     Exqlite.Sqlite3.close(connection)
   end
@@ -181,7 +182,9 @@ defmodule SelectoDBSQLite.Adapter do
 
       with {:ok, sqlite_query, params} <-
              query |> normalize_query() |> convert_parameters(params) do
-        execute_prepared(connection, sqlite_query, params, timeout)
+        SelectoDBSQLite.ConnectionOwner.statement(connection, sqlite_query, fn ->
+          execute_prepared(connection, sqlite_query, params, timeout)
+        end)
       end
     end
   end
@@ -290,12 +293,15 @@ defmodule SelectoDBSQLite.Adapter do
   @impl true
   def transaction(conn, fun, _opts) do
     connection = unwrap_connection(conn)
-    depth = transaction_depth_for(connection)
 
-    with {:ok, boundary} <- begin_transaction(connection, depth) do
-      put_transaction_depth(connection, depth + 1)
-      execute_transaction_fun(connection, fun, depth + 1, boundary)
-    end
+    SelectoDBSQLite.ConnectionOwner.run(connection, fn ->
+      depth = transaction_depth_for(connection)
+
+      with {:ok, boundary} <- begin_transaction(connection, depth) do
+        put_transaction_depth(connection, depth + 1)
+        execute_transaction_fun(connection, fun, depth + 1, boundary)
+      end
+    end)
   end
 
   @impl true

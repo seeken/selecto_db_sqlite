@@ -675,3 +675,13 @@ certification checks; these are separate from post-image verification.
 Explicit RETURNING fields preserve their native column names and SQLite values.
 The bundled extension asserts stored scope inside the projection before those
 values are returned; the public result contains only the requested fields.
+
+### Shared-connection transaction ownership
+
+Adapter operations use a monitored connection-wide reentrant owner. A transaction
+callback, read guard, or BEGIN/SAVEPOINT issued through `Adapter.execute` retains
+ownership until its complete boundary ends. Other processes queue; they cannot
+join it as a nested savepoint. Owner termination rolls back and restores read
+state before handoff. Same-process nesting and caller-owned rollback are retained.
+Direct calls on a raw Exqlite handle are a trusted host bypass and require host
+serialization; the adapter cannot observe transaction control that bypasses it.

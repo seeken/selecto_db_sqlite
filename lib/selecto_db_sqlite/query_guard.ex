@@ -15,8 +15,31 @@ defmodule SelectoDBSQLite.QueryGuard do
     end
   end
 
-  def enable(connection), do: QueryGuardOwner.acquire(unwrap(connection))
-  def restore(connection, prior), do: QueryGuardOwner.release(unwrap(connection), prior)
+  def enable(connection) do
+    connection = unwrap(connection)
+
+    with :ok <- SelectoDBSQLite.ConnectionOwner.acquire(connection) do
+      case QueryGuardOwner.acquire(connection) do
+        {:ok, _} = result ->
+          result
+
+        error ->
+          SelectoDBSQLite.ConnectionOwner.release(connection)
+          error
+      end
+    end
+  end
+
+  def restore(connection, prior) do
+    connection = unwrap(connection)
+
+    try do
+      QueryGuardOwner.release(connection, prior)
+    after
+      SelectoDBSQLite.ConnectionOwner.release(connection)
+    end
+  end
+
   def close(connection), do: QueryGuardOwner.close(unwrap(connection))
 
   # Only the connection coordinator touches query_only while it owns a read.

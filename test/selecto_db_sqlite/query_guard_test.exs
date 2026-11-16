@@ -207,7 +207,15 @@ defmodule SelectoDBSQLite.QueryGuardTest do
   end
 
   defp setting(conn) do
-    {:ok, %{rows: [[value]]}} = Adapter.execute(conn, "PRAGMA query_only", [], [])
-    value
+    # Deliberate trusted host introspection while another process owns the
+    # connection. Adapter.execute now correctly queues behind that owner.
+    {:ok, statement} = Exqlite.Sqlite3.prepare(conn, "PRAGMA query_only")
+
+    try do
+      {:row, [value]} = Exqlite.Sqlite3.step(conn, statement)
+      value
+    after
+      Exqlite.Sqlite3.release(conn, statement)
+    end
   end
 end
