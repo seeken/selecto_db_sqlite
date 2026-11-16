@@ -1015,8 +1015,7 @@ defmodule SelectoDBSQLite.Adapter do
     end
   end
 
-  # A guarded INSERT/UPDATE/UPSERT (TW-09 post-image) returns its rows'
-  # keys and is re-read by them after the statement (SelectoDBSQLite.PostImage).
+  # A guarded write checks its stored tuple in the statement's RETURNING.
   defp execute_guarded_statement(connection, command, statement, opts) do
     case SelectoDBSQLite.PostImage.prepare(command) do
       {:plain, _command} ->
@@ -1030,7 +1029,9 @@ defmodule SelectoDBSQLite.Adapter do
                  &WriteCompiler.compile_predicate(&1, context: Keyword.get(opts, :context, %{}))
                ),
              {:ok, result} <- execute(connection, checked.text, checked.params, opts) do
-          SelectoDBSQLite.PostImage.verify(result)
+          SelectoDBSQLite.PostImage.verify(result, command)
+        else
+          error -> SelectoDBSQLite.PostImage.execution_error(error)
         end
     end
   end

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0
- * Adapter-owned exact JSON containment. Numbers retain their original decimal
+ * Adapter-owned stored-scope assertions and exact JSON containment. Numbers retain their original decimal
  * tokens; no SQLite REAL or host floating-point conversion occurs.
  */
 #include "sqlite3ext.h"
@@ -419,6 +419,17 @@ static void json_contains(sqlite3_context *context, int argc, sqlite3_value **ar
   } else sqlite3_result_int(context, result);
 }
 
+/* Same-tuple scope assertion for a RETURNING value. sqlite3_result_value keeps
+ * NULL, integer, float, text and blob values without a host codec round trip. */
+static void scope_value(sqlite3_context *context, int argc, sqlite3_value **argv) {
+  (void)argc;
+  if (sqlite3_value_type(argv[1]) != SQLITE_INTEGER || sqlite3_value_int64(argv[1]) != 1) {
+    sqlite3_result_error(context, "selecto_post_image_scope_violation", -1);
+    return;
+  }
+  sqlite3_result_value(context, argv[0]);
+}
+
 #if defined(_WIN32)
 #if !defined(SELECTO_JSON_DEF_EXPORT)
 __declspec(dllexport)
@@ -429,6 +440,9 @@ __attribute__((visibility("default")))
 int sqlite3_selectojson_init(sqlite3 *database, char **error, const sqlite3_api_routines *api) {
   (void)error;
   initialize_api(api);
+  int rc = sqlite3_create_function_v2(database, "selecto_scope_value_v1", 2,
+      SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL, scope_value, NULL, NULL, NULL);
+  if (rc != SQLITE_OK) return rc;
   return sqlite3_create_function_v2(database, "selecto_json_contains_exact_v1", 2,
       SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL, json_contains, NULL, NULL, NULL);
 }

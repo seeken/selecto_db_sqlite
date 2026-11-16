@@ -13,7 +13,7 @@ defmodule SelectoDBSQLite.NativeJson do
 
   def available?(connection) do
     sql =
-      "SELECT selecto_json_contains_exact_v1('{\"n\":1.0000000000000000001}', '{\"n\":1}') = 0 AND " <>
+      "SELECT selecto_scope_value_v1(7, 1) = 7 AND selecto_json_contains_exact_v1('{\"n\":1.0000000000000000001}', '{\"n\":1}') = 0 AND " <>
         "selecto_json_contains_exact_v1('{\"n\":9007199254740993.0}', '{\"n\":9007199254740993}') = 1 AND " <>
         "selecto_json_contains_exact_v1('{\"k\":1,\"k\":2}', '{\"k\":2}') = 1 AND " <>
         "selecto_json_contains_exact_v1('[true]', 'true') = 1 AND " <>

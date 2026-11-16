@@ -671,3 +671,7 @@ non-relaxing deadline and exact-value contracts remain in force.
 
 Typed insert admission and prepared rule/source authority retain their narrower
 certification checks; these are separate from post-image verification.
+
+Explicit RETURNING fields preserve their native column names and SQLite values.
+The bundled extension asserts stored scope inside the projection before those
+values are returned; the public result contains only the requested fields.

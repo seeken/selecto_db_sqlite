@@ -1,8 +1,7 @@
 defmodule SelectoDBSQLite.PostImageTest do
   use ExUnit.Case, async: false
 
-  # TW-09 post-image: a guarded write's rows are re-read by key under the
-  # trusted scope after the statement and its triggers have run.
+  # TW-09: validate each stored tuple in the write statement's RETURNING.
 
   alias SelectoDBSQLite.Adapter
   alias Selecto.Write.{Command, Error}
@@ -62,11 +61,88 @@ defmodule SelectoDBSQLite.PostImageTest do
   defp violation?(result),
     do: match?({:error, %Error{details: %{code: :query_rule_violation}}}, result)
 
+  test "explicit native RETURNING keeps requested columns and exact storage values", %{
+    connection: c
+  } do
+    exec!(c, "ALTER TABLE tw ADD COLUMN payload BLOB")
+    exec!(c, "UPDATE tw SET payload = x'00ff', name = 'café' WHERE id = 1")
+    command = %{update([{"touched", 1}], site("S1")) | returning: ["payload", "name", "id"]}
+    assert {:ok, compiled} = SelectoDBSQLite.WriteCompiler.compile(command, [])
+
+    assert {:ok, checked} =
+             SelectoDBSQLite.PostImage.returning(
+               compiled,
+               command,
+               &SelectoDBSQLite.WriteCompiler.compile_predicate/1
+             )
+
+    assert {:ok, %{columns: ["payload", "name", "id"], rows: [[<<0, 255>>, "café", 1]]}} =
+             Adapter.execute(c, checked.text, checked.params, [])
+  end
+
+  test "scope value assertion preserves storage classes and rejects false, null and wide truth",
+       %{connection: c} do
+    for value <- [nil, 0, 9_007_199_254_740_993, 1.25, "café", {:blob, <<0, 255>>}] do
+      assert {:ok, %{rows: [[actual]]}} =
+               Adapter.execute(c, "SELECT selecto_scope_value_v1(?, 1)", [value], [])
+
+      expected =
+        case value do
+          {:blob, bytes} -> bytes
+          other -> other
+        end
+
+      assert actual == expected
+    end
+
+    for truth <- [nil, 0, 4_294_967_297] do
+      assert {:error, _} = Adapter.execute(c, "SELECT selecto_scope_value_v1(7, ?)", [truth], [])
+    end
+  end
+
+  test "a late scope failure restores all matched rows with explicit RETURNING", %{connection: c} do
+    exec!(c, "INSERT INTO tw (id, org_key, site, name) VALUES (2, 'T1', 'S1', 'b')")
+    scope = {:or, [{:eq, {:field, "id"}, {:literal, 1}}, site("S1")]}
+
+    command = %{
+      update([{"site", "S9"}], scope)
+      | predicate: site("S1"),
+        expected_cardinality: {:exactly, 2},
+        returning: ["name", "id"]
+    }
+
+    assert violation?(Adapter.execute_write_unsafe(c, command, []))
+    assert stored(c) == [[1, "T1", "S1", "a"], [2, "T1", "S1", "b"]]
+  end
+
+  test "native scope errors preserve earlier caller work and allow later writes", %{connection: c} do
+    assert {:ok, :kept} =
+             Adapter.transaction(c, fn tx ->
+               exec!(
+                 tx,
+                 "INSERT INTO tw (id, org_key, site, name) VALUES (3, 'T1', 'S1', 'pending')"
+               )
+
+               command = %{update([{"site", "S9"}], site("S1")) | returning: ["name", "id"]}
+               assert violation?(Adapter.execute_write_unsafe(tx, command, []))
+
+               assert {:ok, %{affected_rows: 1}} =
+                        Adapter.execute_write_unsafe(tx, update([{"name", "u"}], site("S1")), [])
+
+               {:ok, :kept}
+             end)
+
+    assert stored(c) == [[1, "T1", "S1", "u"], [3, "T1", "S1", "pending"]]
+  end
+
   test "a caller column cannot replace the appended scope decision", %{connection: c} do
     exec!(c, "ALTER TABLE tw ADD COLUMN selecto_post_image_truth INTEGER DEFAULT 1")
-    command = %{update([{"site", "S9"}], site("S1")) | returning: ["selecto_post_image_truth"]}
-    assert violation?(Adapter.execute_write_unsafe(c, command, []))
-    assert stored(c) == [[1, "T1", "S1", "a"]]
+
+    for returning <- [["selecto_post_image_truth"], :all] do
+      command = %{update([{"site", "S9"}], site("S1")) | returning: returning}
+      assert violation?(Adapter.execute_write_unsafe(c, command, []))
+      assert stored(c) == [[1, "T1", "S1", "a"]]
+    end
   end
 
   test "an update that assigns the scoped column rolls back", %{connection: c} do
