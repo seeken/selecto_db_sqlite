@@ -656,3 +656,18 @@ key affinities. Direct key projections preserve native collations. Aggregates,
 joined or nested children, non-equality or nested outer references, and other
 broader native LATERAL forms refuse before business query preparation. A
 compile-only query cannot provide the connected catalog proof.
+
+### Governed write boundary
+
+Governed writes check the declared policy and payload-bound authorization,
+keep tenant/scope predicates in WHERE, and check expected cardinality before
+COMMIT. PostgreSQL and SQLite evaluate the post-image predicate in the same
+statement's RETURNING, including storage coercion, defaults and BEFORE-trigger
+effects where supported. A false or unknown result rolls back the atomic unit.
+Host-installed triggers, rules, views, RLS policies and concurrent owner DDL
+are the schema owner's responsibility. Governed writes do not inspect catalogs
+or re-read rows solely to defend against those objects. Host transaction,
+non-relaxing deadline and exact-value contracts remain in force.
+
+Typed insert admission and prepared rule/source authority retain their narrower
+certification checks; these are separate from post-image verification.

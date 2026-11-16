@@ -62,8 +62,12 @@ defmodule SelectoDBSQLite.PostImageTest do
   defp violation?(result),
     do: match?({:error, %Error{details: %{code: :query_rule_violation}}}, result)
 
-  defp not_evaluable?(result),
-    do: match?({:error, %Error{details: %{code: :query_rule_not_evaluable}}}, result)
+  test "a caller column cannot replace the appended scope decision", %{connection: c} do
+    exec!(c, "ALTER TABLE tw ADD COLUMN selecto_post_image_truth INTEGER DEFAULT 1")
+    command = %{update([{"site", "S9"}], site("S1")) | returning: ["selecto_post_image_truth"]}
+    assert violation?(Adapter.execute_write_unsafe(c, command, []))
+    assert stored(c) == [[1, "T1", "S1", "a"]]
+  end
 
   test "an update that assigns the scoped column rolls back", %{connection: c} do
     assert violation?(Adapter.execute_write_unsafe(c, update([{"site", "S9"}], site("S1")), []))
@@ -123,7 +127,7 @@ defmodule SelectoDBSQLite.PostImageTest do
     assert stored(c) == [[1, "T1", "S1", "a"]]
   end
 
-  test "a view and a table without a usable key are refused", %{connection: c} do
+  test "prepared view admission remains separate; RETURNING needs no unique key", %{connection: c} do
     exec!(c, "CREATE VIEW tw_v AS SELECT * FROM tw")
 
     exec!(
@@ -140,21 +144,19 @@ defmodule SelectoDBSQLite.PostImageTest do
     exec!(c, "CREATE INDEX dk_id ON dk (id)")
     exec!(c, "INSERT INTO dk VALUES (1, 'S1', 'x'), (1, 'S2', 'y')")
 
-    assert not_evaluable?(
+    assert {:ok, %{affected_rows: 1}} =
              Adapter.execute_write_unsafe(c, update([{"name", "u"}], site("S1"), "dk"), [])
-           )
 
     # A user column named rowid shadows the real rowid.
     exec!(c, "CREATE TABLE sr (\"rowid\" TEXT, id INTEGER, site TEXT, name TEXT)")
     exec!(c, "INSERT INTO sr VALUES ('k', 1, 'S1', 'x')")
 
-    assert not_evaluable?(
+    assert {:ok, %{affected_rows: 1}} =
              Adapter.execute_write_unsafe(
                c,
                update([{"name", "u"}], site("S1"), "sr", ["rowid"]),
                []
              )
-           )
 
     assert stored(c) == [[1, "T1", "S1", "a"]]
   end

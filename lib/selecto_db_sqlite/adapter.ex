@@ -1023,18 +1023,14 @@ defmodule SelectoDBSQLite.Adapter do
         execute(connection, statement.text, statement.params, opts)
 
       {:post_image, command} ->
-        text = SelectoDBSQLite.PostImage.returning(statement.text, command)
-
-        with {:ok, query_result} <- execute(connection, text, statement.params, opts),
-             {query_result, keys} = SelectoDBSQLite.PostImage.split_result(query_result, command),
-             :ok <-
-               SelectoDBSQLite.PostImage.verify(
+        with {:ok, checked} <-
+               SelectoDBSQLite.PostImage.returning(
+                 statement,
                  command,
-                 keys,
-                 &execute(connection, &1, &2, opts),
-                 opts
-               ) do
-          {:ok, query_result}
+                 &WriteCompiler.compile_predicate(&1, context: Keyword.get(opts, :context, %{}))
+               ),
+             {:ok, result} <- execute(connection, checked.text, checked.params, opts) do
+          SelectoDBSQLite.PostImage.verify(result)
         end
     end
   end
