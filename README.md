@@ -9,7 +9,7 @@ Add `selecto_db_sqlite` to your list of dependencies:
 ```elixir
 def deps do
   [
-    {:selecto, ">= 0.5.0 and < 0.6.0"},
+    {:selecto, ">= 0.6.0 and < 0.7.0"},
     {:selecto_db_sqlite, "~> 0.5"},
     {:exqlite, "~> 0.39"}
   ]

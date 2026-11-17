@@ -40,7 +40,7 @@ defmodule Selecto.DB.SQLite.MixProject do
     if use_local_ecosystem?() do
       {:selecto, path: local_selecto_path()}
     else
-      {:selecto, ">= 0.5.0 and < 0.6.0"}
+      {:selecto, ">= 0.6.0 and < 0.7.0"}
     end
   end
 
