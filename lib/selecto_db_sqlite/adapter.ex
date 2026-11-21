@@ -319,6 +319,10 @@ defmodule SelectoDBSQLite.Adapter do
   def supports?(:rollup), do: true
   def supports?(:cube), do: true
   def supports?(:grouping_sets), do: true
+  # RIGHT and FULL JOIN need SQLite 3.39; exqlite bundles 3.53 (a connection's
+  # own version: connection_capabilities/1).
+  def supports?(:right_join), do: true
+  def supports?(:full_join), do: true
   def supports?(:stream), do: true
   # UUIDs are TEXT (see the README's type map): filters bind the string form.
   def supports?(:uuid_text_storage), do: true
