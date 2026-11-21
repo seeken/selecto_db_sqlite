@@ -117,11 +117,28 @@ defmodule SelectoDBSQLite.Buckets do
   end
 
   defp result(%Expression{kind: kind, ranges: [_ | _] = ranges} = bucket)
-       when kind in [:numeric_ranges, :year_ranges, :elapsed_days_ranges, :date_relative_ranges] do
+       when kind in [
+              :numeric_ranges,
+              :year_ranges,
+              :month_ranges,
+              :elapsed_days_ranges,
+              :date_relative_ranges
+            ] do
     value =
       case kind do
         :year_ranges ->
           year(bucket.expression)
+
+        # Calendar months ago: 0 is this month, 1 last month.
+        :month_ranges ->
+          [
+            "((CAST(strftime('%Y', 'now') AS INTEGER) * 12 + CAST(strftime('%m', 'now') AS INTEGER)) - ",
+            "(",
+            year(bucket.expression),
+            " * 12 + CAST(strftime('%m', ",
+            bucket.expression,
+            ") AS INTEGER)))"
+          ]
 
         :elapsed_days_ranges ->
           [

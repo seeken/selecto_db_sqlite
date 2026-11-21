@@ -70,6 +70,31 @@ defmodule SelectoDBSQLite.ComputedValues do
     end
   end
 
+  # Whole calendar days from start to end. SQLite keeps dates and datetimes
+  # as text; date() reads either and drops the time of day.
+  def render(
+        %ComputedValue{
+          operation: :days_between,
+          expression: [start, finish],
+          type: "integer",
+          path: []
+        } = fragment,
+        _selecto
+      )
+      when map_size(fragment) == 5 do
+    if sql?(start) and present?(start) and sql?(finish) and present?(finish),
+      do:
+        {:ok,
+         [
+           "CAST(julianday(date(",
+           finish,
+           ")) - julianday(date(",
+           start,
+           ")) AS INTEGER)"
+         ]},
+      else: invalid(:days_between)
+  end
+
   def render(_fragment, _selecto), do: invalid(:unknown)
 
   defp path_marker?({:param, value}) when is_binary(value),

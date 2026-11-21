@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `days_between` computed values (`julianday(date(...))` of the text-stored
+  dates and datetimes) and `:month_ranges` buckets (calendar months ago).
 - The double rule follows SQLite's own read of a number (19 significant
   digits, cut): Decimals that SQLite stores as the largest double bind again
   (main stored them); only one SQLite reads as an infinity, or a nonzero one
