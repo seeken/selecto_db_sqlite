@@ -43,6 +43,7 @@ defmodule Selecto.DB.SQLite do
   defdelegate rollup_literal_order(index), to: SelectoDBSQLite.Adapter
   defdelegate rollup_sort_fix(connection), to: SelectoDBSQLite.Adapter
   defdelegate render_rollup(selecto, opts), to: SelectoDBSQLite.Adapter
+  defdelegate render_grouping_sets(selecto, opts), to: SelectoDBSQLite.Adapter
   defdelegate transaction(connection, fun), to: SelectoDBSQLite.Adapter
   defdelegate transaction(connection, fun, opts), to: SelectoDBSQLite.Adapter
   defdelegate supports?(feature), to: SelectoDBSQLite.Adapter

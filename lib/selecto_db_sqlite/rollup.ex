@@ -1,11 +1,19 @@
 defmodule SelectoDBSQLite.Rollup do
   @moduledoc false
 
+  # SQLite has no ROLLUP, CUBE or GROUPING SETS. Each grouping set of the
+  # query (Selecto.GroupingSets.positions/1: a rollup's prefixes, a cube's
+  # subsets, the declared sets) becomes one plain-grouped UNION ALL branch;
+  # dimensions grouped away in a branch project NULL and GROUPING(...) is
+  # the branch's constant mask (first argument most significant).
+
   alias Selecto.Builder.Sql
   alias Selecto.Builder.Sql.Select
   alias SelectoDBSQLite.{Adapter, RuntimeCapabilities}
 
   @max_dimensions 8
+  # Declared grouping sets (at most 64 of them) may span more dimensions.
+  @max_set_dimensions 64
   @max_selectors 64
   @directions [
     :asc,
@@ -18,12 +26,22 @@ defmodule SelectoDBSQLite.Rollup do
   @aggregate_functions ~w(COUNT SUM AVG MIN MAX)
 
   def render(selecto, opts) do
-    case RuntimeCapabilities.require_feature(selecto, :rollup) do
+    mode = Selecto.GroupingSets.mode(selecto)
+
+    try do
+      render(selecto, opts, mode)
+    catch
+      {__MODULE__, :unsupported, message} -> refuse!(mode, message)
+    end
+  end
+
+  defp render(selecto, opts, mode) do
+    case RuntimeCapabilities.require_feature(selecto, mode) do
       :ok -> :ok
       {:error, error} -> Selecto.Builder.ScopeRefusal.unsupported!(error)
     end
 
-    dimensions = dimensions!(selecto.set.group_by)
+    {dimensions, sets} = grouping!(mode, selecto.set.group_by)
     selectors = Map.get(selecto.set, :selected, [])
     validate_shape!(selecto, selectors)
     Enum.each(selectors, &validate_selector!(&1, dimensions))
@@ -43,14 +61,16 @@ defmodule SelectoDBSQLite.Rollup do
     validate_aliases!(aliases)
     order = outer_order!(Map.get(selecto.set, :order_by, []), selectors, aliases)
 
+    dimension_tuple = List.to_tuple(dimensions)
+
     {branches, resolved_joins} =
-      Enum.map_reduce(length(dimensions)..0//-1, [], fn retained, joins_acc ->
-        prefix = Enum.take(dimensions, retained)
+      Enum.map_reduce(sets, [], fn set, joins_acc ->
+        retained = Enum.map(set, &elem(dimension_tuple, &1))
 
         selected =
           Enum.zip(selectors, aliases)
           |> Enum.map(fn {selector, name} ->
-            {:field, rewrite(selector, dimensions, prefix), name}
+            {:field, rewrite(selector, dimensions, retained), name}
           end)
 
         # This internal aggregate also gives the empty-input total one row when
@@ -60,7 +80,7 @@ defmodule SelectoDBSQLite.Rollup do
         branch_set =
           selecto.set
           |> Map.put(:selected, selected)
-          |> Map.put(:group_by, prefix)
+          |> Map.put(:group_by, retained)
           |> Map.put(:active_joins, joins)
           |> Map.put(:order_by, [])
           |> Map.put(:limit, nil)
@@ -102,18 +122,34 @@ defmodule SelectoDBSQLite.Rollup do
     {sql, aliases, resolved_joins}
   end
 
-  defp dimensions!(rollup: dimensions) when is_list(dimensions) do
-    fields = Enum.map(dimensions, &field/1)
-
-    unless fields != [] and length(fields) <= @max_dimensions and
-             Enum.all?(fields, &is_binary/1) and length(Enum.uniq(fields)) == length(fields) do
-      unsupported!("one to eight distinct field dimensions are required")
-    end
-
-    dimensions
+  # The dimensions and the grouping sets (positions into them), in the order
+  # their branches are unioned.
+  defp grouping!(:rollup, rollup: dimensions) when is_list(dimensions) do
+    validate_dimensions!(dimensions, @max_dimensions)
+    %{dimensions: dimensions, sets: sets} = Selecto.GroupingSets.positions(rollup: dimensions)
+    {dimensions, sets}
   end
 
-  defp dimensions!(_), do: unsupported!("ROLLUP must be the only grouping specification")
+  defp grouping!(:rollup, _), do: unsupported!("ROLLUP must be the only grouping specification")
+
+  defp grouping!(mode, [{mode, _}] = group_by) when mode in [:cube, :grouping_sets] do
+    %{dimensions: dimensions, sets: sets} = Selecto.GroupingSets.positions(group_by)
+    limit = if mode == :cube, do: @max_dimensions, else: @max_set_dimensions
+    validate_dimensions!(dimensions, limit)
+    {dimensions, sets}
+  end
+
+  defp grouping!(_mode, _),
+    do: unsupported!("CUBE or GROUPING SETS must be the only grouping specification")
+
+  defp validate_dimensions!(dimensions, limit) do
+    fields = Enum.map(dimensions, &field/1)
+
+    unless fields != [] and length(fields) <= limit and
+             Enum.all?(fields, &is_binary/1) and length(Enum.uniq(fields)) == length(fields) do
+      unsupported!("one to #{limit} distinct field dimensions are required")
+    end
+  end
 
   defp validate_shape!(selecto, selectors) do
     unless selectors != [] and length(selectors) <= @max_selectors do
@@ -129,7 +165,7 @@ defmodule SelectoDBSQLite.Rollup do
           :having
         ] do
       unless Map.get(selecto.set, key, []) in [nil, [], %{}] do
-        unsupported!("#{key} cannot be combined with bounded SQLite rollup")
+        unsupported!("#{key} cannot be combined with bounded SQLite grouping sets")
       end
     end
   end
@@ -146,7 +182,7 @@ defmodule SelectoDBSQLite.Rollup do
 
     unless arguments != [] and length(Enum.uniq(arguments)) == length(arguments) and
              Enum.all?(arguments, &(&1 in fields)) do
-      unsupported!("GROUPING arguments must be distinct rollup dimensions")
+      unsupported!("GROUPING arguments must be distinct grouping dimensions")
     end
   end
 
@@ -172,13 +208,15 @@ defmodule SelectoDBSQLite.Rollup do
     end
   end
 
-  defp rewrite({:field, selector, _alias}, dimensions, prefix),
-    do: rewrite(selector, dimensions, prefix)
+  # `retained` are the dimensions a branch groups by.
+  defp rewrite({:field, selector, _alias}, dimensions, retained),
+    do: rewrite(selector, dimensions, retained)
 
-  defp rewrite({:field, selector}, dimensions, prefix), do: rewrite(selector, dimensions, prefix)
+  defp rewrite({:field, selector}, dimensions, retained),
+    do: rewrite(selector, dimensions, retained)
 
-  defp rewrite({:grouping, arguments}, _dimensions, prefix) do
-    retained = Enum.map(prefix, &field/1)
+  defp rewrite({:grouping, arguments}, _dimensions, retained) do
+    retained = Enum.map(retained, &field/1)
 
     mask =
       Enum.reduce(arguments, 0, fn argument, mask ->
@@ -188,12 +226,12 @@ defmodule SelectoDBSQLite.Rollup do
     {:literal, mask}
   end
 
-  defp rewrite({:coalesce, arguments}, dimensions, prefix),
-    do: {:coalesce, Enum.map(arguments, &rewrite(&1, dimensions, prefix))}
+  defp rewrite({:coalesce, arguments}, dimensions, retained),
+    do: {:coalesce, Enum.map(arguments, &rewrite(&1, dimensions, retained))}
 
-  defp rewrite(selector, dimensions, prefix) do
+  defp rewrite(selector, dimensions, retained) do
     if field(selector) in Enum.map(dimensions, &field/1) and
-         field(selector) not in Enum.map(prefix, &field/1),
+         field(selector) not in Enum.map(retained, &field/1),
        do: {:literal, nil},
        else: selector
   end
@@ -234,7 +272,7 @@ defmodule SelectoDBSQLite.Rollup do
   defp validate_aliases!(aliases) do
     unless Enum.all?(aliases, &(is_binary(&1) and &1 != "")) and
              length(Enum.uniq_by(aliases, &String.downcase/1)) == length(aliases) do
-      unsupported!("rollup output aliases must be unique")
+      unsupported!("grouping output aliases must be unique")
     end
   end
 
@@ -314,11 +352,14 @@ defmodule SelectoDBSQLite.Rollup do
     ]
   end
 
-  defp unsupported!(message) do
+  # A shape the emulation cannot express; render/2 refuses it for the mode.
+  defp unsupported!(message), do: throw({__MODULE__, :unsupported, message})
+
+  defp refuse!(feature, message) do
     error =
-      Selecto.Error.validation_error("Unsupported SQLite rollup: " <> message, %{
+      Selecto.Error.validation_error("Unsupported SQLite #{feature}: " <> message, %{
         adapter: :sqlite,
-        unsupported_feature: :rollup
+        unsupported_feature: feature
       })
 
     # Refused typed through every execute entry point.

@@ -30,6 +30,8 @@ defmodule SelectoDBSQLite.RuntimeCapabilities do
         cte: cte,
         recursive_cte: cte,
         rollup: cte,
+        cube: cte,
+        grouping_sets: cte,
         window_functions: windows,
         lateral_join: windows,
         returning: returning,

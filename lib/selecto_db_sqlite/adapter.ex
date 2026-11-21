@@ -288,6 +288,10 @@ defmodule SelectoDBSQLite.Adapter do
   @impl true
   def render_rollup(selecto, opts), do: SelectoDBSQLite.Rollup.render(selecto, opts)
 
+  # CUBE and GROUPING SETS: one UNION ALL branch per grouping set, as rollups.
+  @impl true
+  def render_grouping_sets(selecto, opts), do: SelectoDBSQLite.Rollup.render(selecto, opts)
+
   def transaction(conn, fun), do: transaction(conn, fun, [])
 
   @impl true
@@ -313,6 +317,8 @@ defmodule SelectoDBSQLite.Adapter do
   def supports?(:returning), do: true
   def supports?(:text_search), do: true
   def supports?(:rollup), do: true
+  def supports?(:cube), do: true
+  def supports?(:grouping_sets), do: true
   def supports?(:stream), do: true
   # UUIDs are TEXT (see the README's type map): filters bind the string form.
   def supports?(:uuid_text_storage), do: true
