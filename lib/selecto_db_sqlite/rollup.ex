@@ -236,6 +236,7 @@ defmodule SelectoDBSQLite.Rollup do
        else: selector
   end
 
+  defp aggregate?({:ratio_of_sums, _}), do: true
   defp aggregate?({:count}), do: true
   defp aggregate?({:count, _}), do: true
   defp aggregate?({:count_distinct, _}), do: true
