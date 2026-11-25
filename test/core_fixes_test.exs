@@ -143,4 +143,17 @@ defmodule SelectoDBSQLite.CoreFixesTest do
       assert Enum.all?(params, &String.starts_with?(&1, String.slice(clock, 0, 10)))
     end
   end
+
+  test "standalone temporal fallback retains localized now time", %{conn: conn} do
+    sql!(conn, "CREATE TABLE fix_events(id INTEGER, at TEXT)")
+    sql!(conn, "INSERT INTO fix_events VALUES(1,NULL)")
+
+    q =
+      base(conn, domain(:naive_datetime))
+      |> Selecto.as_of("2026-03-15T20:15:00-06:00")
+      |> Selecto.timezone("America/Denver")
+      |> Selecto.select([{:computed_value, ["temporal_coalesce", ["field", "at"], ["now"]]}])
+
+    assert rows(q) == [["2026-03-15T20:15:00"]]
+  end
 end
