@@ -13,6 +13,89 @@ defmodule SelectoDBSQLite.ComputedValues do
   }
 
   def render(
+        %{__struct__: Selecto.Dialect.ComputedValue, operation: :month_day, expression: value},
+        _query
+      ),
+      do:
+        {:ok,
+         [
+           "(CAST(strftime('%m', ",
+           value,
+           ") AS INTEGER) * 100 + CAST(strftime('%d', ",
+           value,
+           ") AS INTEGER))"
+         ]}
+
+  def render(
+        %{
+          __struct__: Selecto.Dialect.ComputedValue,
+          operation: :months_between,
+          expression: [start, finish]
+        },
+        _query
+      ),
+      do:
+        {:ok,
+         [
+           "((CAST(strftime('%Y', ",
+           finish,
+           ") AS INTEGER) * 12 + CAST(strftime('%m', ",
+           finish,
+           ") AS INTEGER)) - (CAST(strftime('%Y', ",
+           start,
+           ") AS INTEGER) * 12 + CAST(strftime('%m', ",
+           start,
+           ") AS INTEGER)))"
+         ]}
+
+  def render(
+        %{__struct__: Selecto.Dialect.ComputedValue, operation: :read_clock, expression: value},
+        _query
+      ),
+      do: {:ok, ["datetime(", value, ")"]}
+
+  def render(
+        %{
+          __struct__: Selecto.Dialect.ComputedValue,
+          operation: :period_bound,
+          expression: value,
+          type: _type
+        },
+        _query
+      ),
+      do: {:ok, value}
+
+  def render(
+        %{
+          __struct__: Selecto.Dialect.ComputedValue,
+          operation: operation,
+          expression: [start, finish],
+          type: "decimal",
+          path: []
+        },
+        _selecto
+      )
+      when operation in [:hours_between, :fractional_days_between] do
+    multiplier = if operation == :hours_between, do: "24.0", else: "1.0"
+    {:ok, ["((julianday(", finish, ") - julianday(", start, ")) * ", multiplier, ")"]}
+  end
+
+  def render(
+        %{
+          __struct__: Selecto.Dialect.ComputedValue,
+          operation: :epoch_datetime,
+          expression: value,
+          type: unit,
+          path: []
+        },
+        _selecto
+      )
+      when unit in ["seconds", "milliseconds"] do
+    scale = if unit == "milliseconds", do: "1000.0", else: "1.0"
+    {:ok, ["datetime(", value, " / ", scale, ", 'unixepoch')"]}
+  end
+
+  def render(
         %ComputedValue{operation: :divide, expression: [left, right], type: "decimal", path: []} =
           fragment,
         _selecto
